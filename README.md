@@ -19,11 +19,24 @@ Then open the printed URL (default `https://localhost:5001`).
 ## Sample data
 
 - Profession + items data packs: `data/Era/items.json`, `data/Era/professions/cooking.json`
+- Anniversary sample pack (placeholder for Phase 2): `data/Anniversary/items.json`, `data/Anniversary/professions/cooking.json`
 - Deterministic stub prices: `data/Era/stub-prices.json`
+  - Anniversary stub prices: `data/Anniversary/stub-prices.json`
+
+## Uploading real-ish prices (snapshot workflow)
+
+- Target itemId list endpoints:
+  - `GET /api/scans/targets?version=Anniversary`
+  - `GET /api/scans/targets.lua?version=Anniversary`
+- Upload UI: `/upload` (stores prices as provider `UploadedSnapshot` in SQLite)
+- Addon skeleton + instructions: `addon/WowAhPlannerScan/WowAhPlannerScan.lua`, `docs/addon.md`
+
+## Phase 2
+
+See `Phase2.md` for the plan to scale to Anniversary/TBC and beyond (full recipe packs + real-ish time auction pricing).
 
 ## Tests included
 
 - Planner chooses cheapest recipe: `tests/WowAhPlanner.Tests/PlannerServiceTests.cs`
 - Shopping list quantity aggregation: `tests/WowAhPlanner.Tests/PlannerServiceTests.cs`
 - Data pack loader validation (missing required fields): `tests/WowAhPlanner.Tests/DataPackLoaderTests.cs`
-

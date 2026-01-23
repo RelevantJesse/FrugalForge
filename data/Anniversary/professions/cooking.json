@@ -1,0 +1,21 @@
+{
+  "professionId": 185,
+  "professionName": "Cooking (Sample)",
+  "recipes": [
+    {
+      "recipeId": "spice-bread",
+      "professionId": 185,
+      "name": "Spice Bread",
+      "minSkill": 1,
+      "orangeUntil": 25,
+      "yellowUntil": 35,
+      "greenUntil": 45,
+      "grayAt": 55,
+      "reagents": [
+        { "itemId": 30817, "qty": 1 },
+        { "itemId": 2678, "qty": 1 }
+      ]
+    }
+  ]
+}
+

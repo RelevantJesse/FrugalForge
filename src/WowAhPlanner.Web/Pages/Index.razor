@@ -31,12 +31,19 @@
 
         <label>
             Realm
-            <select @bind="Selection.RealmSlug" @bind:after="OnRealmChanged">
-                @foreach (var realm in _realms)
-                {
-                    <option value="@realm.Slug">@realm.Name</option>
-                }
-            </select>
+            @if (_realms.Count > 0)
+            {
+                <select @bind="Selection.RealmSlug" @bind:after="OnRealmChanged">
+                    @foreach (var realm in _realms)
+                    {
+                        <option value="@realm.Slug">@realm.Name</option>
+                    }
+                </select>
+            }
+            else
+            {
+                <input @bind="Selection.RealmSlug" @bind:after="OnRealmChanged" />
+            }
         </label>
     </div>
 
@@ -86,4 +93,3 @@
         }
     }
 }
-

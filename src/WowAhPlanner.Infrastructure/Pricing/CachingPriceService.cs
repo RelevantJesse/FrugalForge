@@ -90,9 +90,7 @@ public sealed class CachingPriceService(
         {
             var key = realmKey.ToString();
             var existing = await db.ItemPriceSummaries.FindAsync(
-                key,
-                result.ProviderName,
-                summary.ItemId,
+                [key, result.ProviderName, summary.ItemId],
                 cancellationToken);
 
             if (existing is null)

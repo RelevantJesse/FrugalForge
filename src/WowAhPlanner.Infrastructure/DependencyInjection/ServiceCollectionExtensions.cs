@@ -31,6 +31,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IRecipeRepository, JsonDataPackRepository>();
 
         services.AddSingleton<IPriceProvider, StubJsonPriceProvider>();
+        services.AddSingleton<IPriceProvider, UploadedSnapshotPriceProvider>();
         services.AddSingleton<IPriceProvider, BlizzardApiPriceProvider>();
 
         services.AddScoped<IPriceService, CachingPriceService>();
@@ -48,4 +49,3 @@ public static class ServiceCollectionExtensions
         return services;
     }
 }
-
