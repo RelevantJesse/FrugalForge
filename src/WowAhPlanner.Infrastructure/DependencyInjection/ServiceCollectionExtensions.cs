@@ -14,7 +14,8 @@ public static class ServiceCollectionExtensions
         this IServiceCollection services,
         Action<DataPackOptions>? configureDataPacks = null,
         Action<PricingOptions>? configurePricing = null,
-        Action<PriceRefreshWorkerOptions>? configureWorker = null)
+        Action<PriceRefreshWorkerOptions>? configureWorker = null,
+        Action<CommunityUploadOptions>? configureCommunityUploads = null)
     {
         var dataOptions = new DataPackOptions();
         configureDataPacks?.Invoke(dataOptions);
@@ -27,6 +28,11 @@ public static class ServiceCollectionExtensions
         var workerOptions = new PriceRefreshWorkerOptions();
         configureWorker?.Invoke(workerOptions);
         services.AddSingleton(workerOptions);
+
+        var communityOptions = new CommunityUploadOptions();
+        configureCommunityUploads?.Invoke(communityOptions);
+        services.AddSingleton(communityOptions);
+        services.AddSingleton<UploadedSnapshotIngestService>();
 
         services.AddSingleton<JsonDataPackRepository>();
         services.AddSingleton<IRecipeRepository>(sp => sp.GetRequiredService<JsonDataPackRepository>());

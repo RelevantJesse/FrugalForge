@@ -2,44 +2,41 @@
 
 ## Project Structure & Module Organization
 
-- `src/WowAhPlanner.Core`: Domain models + planning algorithms + port interfaces (no EF Core / ASP.NET references).
-- `src/WowAhPlanner.Infrastructure`: EF Core (SQLite) caching, price providers, data pack loader, background workers.
-- `src/WowAhPlanner.Web`: Blazor Server UI + minimal API endpoints (wires DI and configuration).
+- `src/WowAhPlanner.Core`: Domain models, planner algorithm, and port interfaces (no EF Core / ASP.NET dependencies).
+- `src/WowAhPlanner.Infrastructure`: SQLite EF Core persistence, caching, price providers, data pack loader, background workers.
+- `src/WowAhPlanner.Web`: Blazor Server UI and minimal API endpoints (composition root/DI).
 - `tests/WowAhPlanner.Tests`: Unit tests (xUnit).
-- `data/{GameVersion}/`: Versioned data packs (e.g. `data/Anniversary/items.json`, `data/Anniversary/professions/*.json`, `data/Anniversary/producers.json`).
-- `addon/WowAhPlannerScan`: In‑game scan addon (legacy AH API).
-- `docs/`: User-facing documentation and status notes.
-- `tools/`: One-off scripts/utilities.
+- `data/{GameVersion}/`: Versioned data packs (e.g. `data/Anniversary/items.json`, `data/Anniversary/professions/tailoring.json`, `data/Anniversary/producers.json`).
+- `addon/WowAhPlannerScan`: In-game scan addon that exports price snapshots.
+- `docs/`: Notes, UX decisions, and status docs.
+- `tools/`: Utilities/scripts.
 
 ## Build, Test, and Development Commands
 
-- `dotnet build` — builds the full solution.
-- `dotnet test` — runs all unit tests.
-- `dotnet run --project src/WowAhPlanner.Web` — runs the web app locally.
+- `dotnet build WowAhPlanner.slnx` - build the solution.
+- `dotnet test` - run all unit tests.
+- `dotnet run --project src/WowAhPlanner.Web` - run the web app locally.
 
-Tip: if Debug builds fail due to locked DLLs, stop the running `WowAhPlanner.Web` process or build `-c Release`.
+If Debug builds fail due to locked DLLs, stop the running web process or build with `-c Release`.
 
 ## Coding Style & Naming Conventions
 
-- C#: 4-space indentation, idiomatic .NET naming (`PascalCase` types/methods, `camelCase` locals/params).
-- Keep clean boundaries: Core must not depend on Infrastructure/Web; use ports in `WowAhPlanner.Core.Ports`.
-- JSON packs: stable IDs (e.g. `recipeId`, `producerId`), consistent casing, keep files reasonably small and version-scoped.
+- C#: 4-space indentation; use standard .NET naming (`PascalCase` types/methods, `camelCase` locals/params).
+- Keep boundaries strict: Core must not reference Web/Infrastructure. Add dependencies via ports in `WowAhPlanner.Core.Ports` and implement them in Infrastructure.
+- JSON data packs: keep small and version-scoped; prefer stable identifiers (`recipeId`, `producerId`, `itemId`) and consistent casing.
 
 ## Testing Guidelines
 
 - Framework: xUnit (`[Fact]`).
-- Keep tests deterministic: use in-memory repositories/providers (see `tests/WowAhPlanner.Tests/PlannerServiceTests.cs`).
-- Naming: `*Tests.cs` with method names describing behavior (e.g. `Excludes_cooldown_recipes_from_planning`).
+- Prefer deterministic tests: stub providers/repositories; avoid time and filesystem dependencies unless the test is explicitly for loaders.
+- Naming: `*Tests.cs` with behavior-focused method names.
 
 ## Commit & Pull Request Guidelines
 
-- Commit messages in this repo are short and imperative (e.g. “Fix exact search”, “Vendor item support”). Keep them focused and scoped.
-- PRs should include:
-  - what changed + why
-  - any data pack/addon changes and how to validate
-  - screenshots for UI changes (Plan/Targets/Upload) when relevant
+- Commit messages are short and imperative (examples from history: `Fix exact search`, `Vendor item support`, `Docs update`).
+- PRs should include: what/why, how to validate (especially for `data/` and `addon/` changes), and screenshots for UI changes when applicable.
 
 ## Configuration & Safety Notes
 
-- Do not commit secrets/API keys. Use `src/WowAhPlanner.Web/appsettings.json` + user secrets/environment overrides.
-- Treat uploaded snapshots as untrusted input: validate schema and realm/version metadata; prefer safe defaults and explicit overrides.
+- Do not commit secrets or API keys. Use `src/WowAhPlanner.Web/appsettings.json` plus environment overrides/user secrets.
+- Treat uploaded snapshots as untrusted input: validate schema and realm/version metadata; fail closed with clear errors.

@@ -1,6 +1,9 @@
 @page "/upload"
+@using Microsoft.AspNetCore.Authorization
+@attribute [Authorize]
 @inject SelectionState Selection
-@inject Microsoft.EntityFrameworkCore.IDbContextFactory<WowAhPlanner.Infrastructure.Persistence.AppDbContext> DbFactory
+@inject WowAhPlanner.Infrastructure.Pricing.UploadedSnapshotIngestService SnapshotIngest
+@inject Microsoft.AspNetCore.Components.Authorization.AuthenticationStateProvider AuthStateProvider
 
 <PageTitle>Upload snapshot</PageTitle>
 
@@ -11,6 +14,7 @@
     <p>Upload will be stored for: <code>@Selection.ToRealmKey()</code></p>
     <p>Provider name used: <span class="badge">UploadedSnapshot</span></p>
     <p>Tip: set <code>Pricing:PrimaryProviderName</code> to <code>UploadedSnapshot</code> in <code>src/WowAhPlanner.Web/appsettings.json</code>.</p>
+    <p>Uploads are aggregated across the last few uploads to reduce bad/outlier data.</p>
 </div>
 
 <div class="card">
@@ -178,43 +182,21 @@
             }
 
             var realmKey = targetKey.ToString();
-            const string providerName = "UploadedSnapshot";
+            var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+            var uploaderUserId = authState.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
 
-            await using var db = await DbFactory.CreateDbContextAsync();
+            var result = await SnapshotIngest.IngestAsync(
+                realmKey: realmKey,
+                snapshotTimestampUtc: snapshotTs,
+                uploaderUserId: uploaderUserId,
+                prices: dto.Prices.Select(p => new WowAhPlanner.Infrastructure.Pricing.UploadedSnapshotIngestService.UploadPriceRow(
+                    p.ItemId,
+                    p.MinUnitBuyoutCopper,
+                    p.TotalQuantity)).ToArray());
 
-            var upserts = 0;
-            foreach (var p in dto.Prices)
-            {
-                if (p.ItemId <= 0) continue;
-                if (p.MinUnitBuyoutCopper is null) continue;
-
-                var existing = await db.ItemPriceSummaries.FindAsync([realmKey, providerName, p.ItemId]);
-                if (existing is null)
-                {
-                    db.ItemPriceSummaries.Add(new WowAhPlanner.Infrastructure.Persistence.ItemPriceSummaryEntity
-                    {
-                        RealmKey = realmKey,
-                        ProviderName = providerName,
-                        ItemId = p.ItemId,
-                        MinBuyoutCopper = p.MinUnitBuyoutCopper.Value,
-                        MedianCopper = null,
-                        SnapshotTimestampUtc = snapshotTs,
-                        CachedAtUtc = DateTime.UtcNow,
-                    });
-                }
-                else
-                {
-                    existing.MinBuyoutCopper = p.MinUnitBuyoutCopper.Value;
-                    existing.MedianCopper = null;
-                    existing.SnapshotTimestampUtc = snapshotTs;
-                    existing.CachedAtUtc = DateTime.UtcNow;
-                }
-
-                upserts++;
-            }
-
-            await db.SaveChangesAsync();
-            _message = $"Stored {upserts} item prices with snapshot {snapshotTs:u}.";
+            _message = result.UploadId is null
+                ? "No prices were stored."
+                : $"Stored upload {result.UploadId} with {result.StoredItemCount} prices (aggregated {result.AggregatedItemCount}).";
         }
         catch (Exception ex)
         {

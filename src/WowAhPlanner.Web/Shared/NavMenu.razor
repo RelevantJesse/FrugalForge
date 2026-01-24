@@ -3,5 +3,13 @@
     <NavLink class="nav-link" href="/recipes">Recipes</NavLink>
     <NavLink class="nav-link" href="/plan">Plan</NavLink>
     <NavLink class="nav-link" href="/targets">Targets</NavLink>
-    <NavLink class="nav-link" href="/upload">Upload</NavLink>
+    <AuthorizeView>
+        <Authorized>
+            <NavLink class="nav-link" href="/upload">Upload</NavLink>
+            <a class="nav-link" href="/Account/Logout">Log out</a>
+        </Authorized>
+        <NotAuthorized>
+            <a class="nav-link" href="/Account/Login">Log in</a>
+        </NotAuthorized>
+    </AuthorizeView>
 </nav>
