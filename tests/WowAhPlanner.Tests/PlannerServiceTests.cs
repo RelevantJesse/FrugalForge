@@ -40,8 +40,9 @@ public sealed class PlannerServiceTests
             [100] = 10,
             [200] = 999,
         });
+        var vendorRepo = new InMemoryVendorPriceRepository(new Dictionary<int, long>());
 
-        var planner = new PlannerService(recipeRepo, priceService);
+        var planner = new PlannerService(recipeRepo, priceService, vendorRepo);
         var result = await planner.BuildPlanAsync(
             new PlanRequest(
                 RealmKey: new RealmKey(Region.US, GameVersion.Era, "whitemane"),
@@ -74,8 +75,9 @@ public sealed class PlannerServiceTests
 
         var recipeRepo = new InMemoryRecipeRepository(recipes);
         var priceService = new InMemoryPriceService(new Dictionary<int, long> { [100] = 10 });
+        var vendorRepo = new InMemoryVendorPriceRepository(new Dictionary<int, long>());
 
-        var planner = new PlannerService(recipeRepo, priceService);
+        var planner = new PlannerService(recipeRepo, priceService, vendorRepo);
         var result = await planner.BuildPlanAsync(
             new PlanRequest(
                 RealmKey: new RealmKey(Region.US, GameVersion.Era, "whitemane"),
@@ -89,6 +91,94 @@ public sealed class PlannerServiceTests
         var line = Assert.Single(result.Plan!.ShoppingList);
         Assert.Equal(100, line.ItemId);
         Assert.Equal(4m, line.Quantity);
+    }
+
+    [Fact]
+    public async Task Shopping_list_expands_craftable_reagents_into_base_materials()
+    {
+        var recipes = new[]
+        {
+            new Recipe(
+                RecipeId: "make-bolt",
+                ProfessionId: 197,
+                Name: "Bolt of Linen Cloth",
+                MinSkill: 1,
+                OrangeUntil: 0,
+                YellowUntil: 0,
+                GreenUntil: 0,
+                GrayAt: 1,
+                Reagents: [new Reagent(2589, 2)],
+                Output: new RecipeOutput(2996, 1)),
+            new Recipe(
+                RecipeId: "shirt",
+                ProfessionId: 197,
+                Name: "Brown Linen Shirt",
+                MinSkill: 1,
+                OrangeUntil: 100,
+                YellowUntil: 101,
+                GreenUntil: 102,
+                GrayAt: 103,
+                Reagents: [new Reagent(2996, 3), new Reagent(2320, 1)]),
+        };
+
+        var recipeRepo = new InMemoryRecipeRepository(recipes);
+        var priceService = new InMemoryPriceService(new Dictionary<int, long>
+        {
+            [2589] = 10,
+            [2320] = 5,
+        });
+        var vendorRepo = new InMemoryVendorPriceRepository(new Dictionary<int, long>());
+
+        var planner = new PlannerService(recipeRepo, priceService, vendorRepo);
+        var result = await planner.BuildPlanAsync(
+            new PlanRequest(
+                RealmKey: new RealmKey(Region.US, GameVersion.Era, "whitemane"),
+                ProfessionId: 197,
+                CurrentSkill: 1,
+                TargetSkill: 2,
+                PriceMode: PriceMode.Min),
+            CancellationToken.None);
+
+        Assert.NotNull(result.Plan);
+        Assert.DoesNotContain(result.Plan!.ShoppingList, x => x.ItemId == 2996);
+        Assert.Contains(result.Plan!.ShoppingList, x => x.ItemId == 2589 && x.Quantity == 6m);
+    }
+
+    [Fact]
+    public async Task Vendor_items_do_not_require_auction_price()
+    {
+        var recipes = new[]
+        {
+            new Recipe(
+                RecipeId: "r1",
+                ProfessionId: 197,
+                Name: "Uses vendor reagent",
+                MinSkill: 1,
+                OrangeUntil: 100,
+                YellowUntil: 101,
+                GreenUntil: 102,
+                GrayAt: 103,
+                Reagents: [new Reagent(2320, 1)]),
+        };
+
+        var recipeRepo = new InMemoryRecipeRepository(recipes);
+        var priceService = new InMemoryPriceService(new Dictionary<int, long>());
+        var vendorRepo = new InMemoryVendorPriceRepository(new Dictionary<int, long> { [2320] = 40 });
+
+        var planner = new PlannerService(recipeRepo, priceService, vendorRepo);
+        var result = await planner.BuildPlanAsync(
+            new PlanRequest(
+                RealmKey: new RealmKey(Region.US, GameVersion.Era, "whitemane"),
+                ProfessionId: 197,
+                CurrentSkill: 1,
+                TargetSkill: 2,
+                PriceMode: PriceMode.Min),
+            CancellationToken.None);
+
+        Assert.NotNull(result.Plan);
+        var line = Assert.Single(result.Plan!.ShoppingList);
+        Assert.Equal(2320, line.ItemId);
+        Assert.Equal(new Money(40), line.UnitPrice);
     }
 
     private sealed class InMemoryRecipeRepository(params Recipe[] recipes) : IRecipeRepository
@@ -118,6 +208,15 @@ public sealed class PlannerServiceTests
 
             return Task.FromResult(new PriceSnapshot(realmKey, "Test", DateTime.UtcNow, IsStale: false, ErrorMessage: null, Prices: dict));
         }
+    }
+
+    private sealed class InMemoryVendorPriceRepository(IReadOnlyDictionary<int, long> vendorPrices) : IVendorPriceRepository
+    {
+        public Task<IReadOnlyDictionary<int, long>> GetVendorPricesAsync(GameVersion gameVersion, CancellationToken cancellationToken)
+            => Task.FromResult(vendorPrices);
+
+        public Task<long?> GetVendorPriceCopperAsync(GameVersion gameVersion, int itemId, CancellationToken cancellationToken)
+            => Task.FromResult(vendorPrices.TryGetValue(itemId, out var v) ? (long?)v : null);
     }
 }
 

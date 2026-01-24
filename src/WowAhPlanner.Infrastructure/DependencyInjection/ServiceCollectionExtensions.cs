@@ -31,6 +31,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<JsonDataPackRepository>();
         services.AddSingleton<IRecipeRepository>(sp => sp.GetRequiredService<JsonDataPackRepository>());
         services.AddSingleton<IItemRepository>(sp => sp.GetRequiredService<JsonDataPackRepository>());
+        services.AddSingleton<IVendorPriceRepository>(sp => sp.GetRequiredService<JsonDataPackRepository>());
 
         services.AddSingleton<IPriceProvider, StubJsonPriceProvider>();
         services.AddSingleton<IPriceProvider, UploadedSnapshotPriceProvider>();

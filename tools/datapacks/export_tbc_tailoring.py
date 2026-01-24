@@ -250,6 +250,12 @@ def build_tailoring_pack_from_skill_page(
         if not reagents:
             continue
 
+        source = entry.get("source")
+        if isinstance(source, list):
+            learned_by_trainer = 6 in source
+        else:
+            learned_by_trainer = True
+
         recipes.append(
             {
                 "recipeId": recipe_id,
@@ -257,6 +263,7 @@ def build_tailoring_pack_from_skill_page(
                 "name": name,
                 "createsItemId": creates_item_id,
                 "createsQuantity": creates_quantity,
+                "learnedByTrainer": learned_by_trainer,
                 "minSkill": min_skill,
                 "orangeUntil": orange_until,
                 "yellowUntil": yellow_until,
@@ -278,15 +285,42 @@ def build_tailoring_pack_from_skill_page(
     return pack, reagent_item_names
 
 
-def _load_items_json(path: Path) -> Dict[int, str]:
+def _load_items_json_objects(path: Path) -> Dict[int, dict]:
     if not path.exists():
         return {}
     items = json.loads(path.read_text(encoding="utf-8"))
-    return {int(it["itemId"]): it["name"] for it in items}
+    result: Dict[int, dict] = {}
+    if not isinstance(items, list):
+        return result
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        try:
+            item_id = int(item["itemId"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if item_id <= 0:
+            continue
+        result[item_id] = dict(item)
+    return result
 
 
-def _write_items_json(path: Path, items: Dict[int, str]) -> None:
-    data = [{"itemId": item_id, "name": items[item_id]} for item_id in sorted(items)]
+def _load_items_json(path: Path) -> Dict[int, str]:
+    objects = _load_items_json_objects(path)
+    return {item_id: str(obj.get("name") or "") for item_id, obj in objects.items() if obj.get("name")}
+
+
+def _write_items_json(path: Path, items: Dict[int, str], existing: Dict[int, dict]) -> None:
+    data: List[dict] = []
+    for item_id in sorted(items):
+        record = {"itemId": item_id, "name": items[item_id]}
+        previous = existing.get(item_id)
+        if isinstance(previous, dict):
+            for key, value in previous.items():
+                if key in ("itemId", "name"):
+                    continue
+                record[key] = value
+        data.append(record)
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
@@ -331,6 +365,7 @@ def main() -> int:
     args.out_profession_json.parent.mkdir(parents=True, exist_ok=True)
     args.out_profession_json.write_text(json.dumps(pack, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
+    existing_item_objects = _load_items_json_objects(args.out_items_json)
     items = _load_items_json(args.out_items_json)
     missing = 0
     for recipe in pack["recipes"]:
@@ -384,7 +419,7 @@ def main() -> int:
             still_missing = sorted(set(still_missing))
             raise SystemExit(f"Missing {len(still_missing)} reagent item names (e.g. {still_missing[:20]}).")
 
-    _write_items_json(args.out_items_json, items)
+    _write_items_json(args.out_items_json, items, existing_item_objects)
 
     print(f"Wrote {args.out_profession_json} ({args.profession_name}, {len(pack['recipes'])} recipes)")
     print(f"Wrote {args.out_items_json} ({len(items)} items)")

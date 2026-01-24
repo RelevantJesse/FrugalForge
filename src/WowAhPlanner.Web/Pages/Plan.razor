@@ -2,6 +2,7 @@
 @inject SelectionState Selection
 @inject WowAhPlanner.Core.Ports.IRecipeRepository RecipeRepository
 @inject WowAhPlanner.Core.Ports.IItemRepository ItemRepository
+@inject WowAhPlanner.Core.Ports.IVendorPriceRepository VendorPriceRepository
 @inject WowAhPlanner.Core.Services.PlannerService Planner
 
 <PageTitle>Plan</PageTitle>
@@ -120,6 +121,10 @@
                         <td>
                             @_itemNames.GetValueOrDefault(line.ItemId) ?? $"Item {line.ItemId}"
                             <span class="badge">@line.ItemId</span>
+                            @if (_vendorItemIds.Contains(line.ItemId))
+                            {
+                                <span class="badge">vendor</span>
+                            }
                         </td>
                         <td>@line.Quantity.ToString("0.##")</td>
                         <td>@line.UnitPrice</td>
@@ -143,6 +148,7 @@
     private int _targetSkill = 75;
     private bool _ready;
     private Dictionary<int, string> _itemNames = new();
+    private HashSet<int> _vendorItemIds = new();
 
     private PlanComputationResult? _result;
 
@@ -172,6 +178,7 @@
     {
         _result = null;
         _itemNames = new Dictionary<int, string>();
+        _vendorItemIds = new HashSet<int>();
 
         var request = new PlanRequest(
             RealmKey: Selection.ToRealmKey(),
@@ -185,11 +192,16 @@
         if (_result?.Plan is null) return;
 
         var items = await ItemRepository.GetItemsAsync(Selection.GameVersion, CancellationToken.None);
+        var vendor = await VendorPriceRepository.GetVendorPricesAsync(Selection.GameVersion, CancellationToken.None);
         foreach (var itemId in _result.Plan.ShoppingList.Select(s => s.ItemId).Distinct())
         {
             if (items.TryGetValue(itemId, out var name))
             {
                 _itemNames[itemId] = name;
+            }
+            if (vendor.ContainsKey(itemId))
+            {
+                _vendorItemIds.Add(itemId);
             }
         }
     }

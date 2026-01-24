@@ -4,11 +4,12 @@ using System.Text.Json;
 using WowAhPlanner.Core.Domain;
 using WowAhPlanner.Core.Ports;
 
-public sealed class JsonDataPackRepository : IRecipeRepository, IItemRepository
+public sealed class JsonDataPackRepository : IRecipeRepository, IItemRepository, IVendorPriceRepository
 {
     private readonly Dictionary<GameVersion, IReadOnlyList<Profession>> _professionsByVersion = new();
     private readonly Dictionary<(GameVersion Version, int ProfessionId), IReadOnlyList<Recipe>> _recipes = new();
     private readonly Dictionary<GameVersion, IReadOnlyDictionary<int, string>> _itemsByVersion = new();
+    private readonly Dictionary<GameVersion, IReadOnlyDictionary<int, long>> _vendorPricesByVersion = new();
 
     public JsonDataPackRepository(DataPackOptions options)
     {
@@ -42,6 +43,19 @@ public sealed class JsonDataPackRepository : IRecipeRepository, IItemRepository
         return items.TryGetValue(itemId, out var name) ? name : null;
     }
 
+    public Task<IReadOnlyDictionary<int, long>> GetVendorPricesAsync(GameVersion gameVersion, CancellationToken cancellationToken)
+    {
+        _vendorPricesByVersion.TryGetValue(gameVersion, out var vendor);
+        vendor ??= new Dictionary<int, long>();
+        return Task.FromResult(vendor);
+    }
+
+    public async Task<long?> GetVendorPriceCopperAsync(GameVersion gameVersion, int itemId, CancellationToken cancellationToken)
+    {
+        var vendor = await GetVendorPricesAsync(gameVersion, cancellationToken);
+        return vendor.TryGetValue(itemId, out var v) ? v : null;
+    }
+
     private void LoadAll(string rootPath)
     {
         if (!Directory.Exists(rootPath))
@@ -57,7 +71,9 @@ public sealed class JsonDataPackRepository : IRecipeRepository, IItemRepository
                 continue;
             }
 
-            _itemsByVersion[version] = LoadItems(versionDir);
+            var (items, vendorPrices) = LoadItems(versionDir);
+            _itemsByVersion[version] = items;
+            _vendorPricesByVersion[version] = vendorPrices;
 
             var professionsDir = Path.Combine(versionDir, "professions");
             if (!Directory.Exists(professionsDir))
@@ -79,7 +95,7 @@ public sealed class JsonDataPackRepository : IRecipeRepository, IItemRepository
         }
     }
 
-    private static IReadOnlyDictionary<int, string> LoadItems(string versionDir)
+    private static (IReadOnlyDictionary<int, string> Items, IReadOnlyDictionary<int, long> VendorPrices) LoadItems(string versionDir)
     {
         var path = Path.Combine(versionDir, "items.json");
         if (!File.Exists(path))
@@ -97,14 +113,21 @@ public sealed class JsonDataPackRepository : IRecipeRepository, IItemRepository
             }
 
             var dict = new Dictionary<int, string>();
+            var vendor = new Dictionary<int, long>();
             foreach (var item in items)
             {
                 if (item.ItemId <= 0) throw new DataPackValidationException($"Invalid itemId in {path}.");
                 if (string.IsNullOrWhiteSpace(item.Name)) throw new DataPackValidationException($"Missing item name in {path} (itemId={item.ItemId}).");
                 dict[item.ItemId] = item.Name!;
+
+                if (item.VendorPriceCopper is long v)
+                {
+                    if (v < 0) throw new DataPackValidationException($"Invalid vendorPriceCopper in {path} (itemId={item.ItemId}).");
+                    vendor[item.ItemId] = v;
+                }
             }
 
-            return dict;
+            return (dict, vendor);
         }
         catch (JsonException ex)
         {
@@ -124,6 +147,14 @@ public sealed class JsonDataPackRepository : IRecipeRepository, IItemRepository
             }
 
             pack.Validate(path);
+
+            foreach (var outItemId in pack.RecipesDomain.Select(r => r.Output?.ItemId).OfType<int>().Distinct())
+            {
+                if (!items.ContainsKey(outItemId))
+                {
+                    throw new DataPackValidationException($"Unknown output itemId {outItemId} in {path} (missing from items.json).");
+                }
+            }
 
             foreach (var itemId in pack.RecipesDomain.SelectMany(r => r.Reagents).Select(r => r.ItemId).Distinct())
             {
@@ -163,6 +194,7 @@ public sealed class JsonDataPackRepository : IRecipeRepository, IItemRepository
     {
         public int ItemId { get; set; }
         public string? Name { get; set; }
+        public long? VendorPriceCopper { get; set; }
     }
 
     private sealed class ProfessionPack
@@ -197,6 +229,8 @@ public sealed class JsonDataPackRepository : IRecipeRepository, IItemRepository
         public string? RecipeId { get; set; }
         public int ProfessionId { get; set; }
         public string? Name { get; set; }
+        public int? CreatesItemId { get; set; }
+        public int? CreatesQuantity { get; set; }
         public int MinSkill { get; set; }
         public int OrangeUntil { get; set; }
         public int YellowUntil { get; set; }
@@ -209,6 +243,8 @@ public sealed class JsonDataPackRepository : IRecipeRepository, IItemRepository
             if (string.IsNullOrWhiteSpace(RecipeId)) throw new DataPackValidationException($"Missing recipeId in {path}.");
             if (ProfessionId <= 0) throw new DataPackValidationException($"Missing/invalid professionId in {path} (recipeId={RecipeId}).");
             if (string.IsNullOrWhiteSpace(Name)) throw new DataPackValidationException($"Missing name in {path} (recipeId={RecipeId}).");
+            if (CreatesItemId is int createsId && createsId <= 0) throw new DataPackValidationException($"Invalid createsItemId in {path} (recipeId={RecipeId}).");
+            if (CreatesItemId is int && CreatesQuantity is int q && q <= 0) throw new DataPackValidationException($"Invalid createsQuantity in {path} (recipeId={RecipeId}).");
             if (MinSkill < 0) throw new DataPackValidationException($"Invalid minSkill in {path} (recipeId={RecipeId}).");
             if (OrangeUntil < MinSkill) throw new DataPackValidationException($"Invalid orangeUntil in {path} (recipeId={RecipeId}).");
             if (YellowUntil < OrangeUntil) throw new DataPackValidationException($"Invalid yellowUntil in {path} (recipeId={RecipeId}).");
@@ -231,7 +267,10 @@ public sealed class JsonDataPackRepository : IRecipeRepository, IItemRepository
             YellowUntil: YellowUntil,
             GreenUntil: GreenUntil,
             GrayAt: GrayAt,
-            Reagents: (Reagents ?? []).Select(r => r.ToDomain()).ToArray());
+            Reagents: (Reagents ?? []).Select(r => r.ToDomain()).ToArray(),
+            Output: CreatesItemId is int itemId && itemId > 0
+                ? new RecipeOutput(itemId, CreatesQuantity is int q && q > 0 ? q : 1)
+                : null);
     }
 
     private sealed class ReagentDto

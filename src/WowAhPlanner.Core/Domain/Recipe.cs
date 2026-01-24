@@ -9,7 +9,8 @@ public sealed record Recipe(
     int YellowUntil,
     int GreenUntil,
     int GrayAt,
-    IReadOnlyList<Reagent> Reagents)
+    IReadOnlyList<Reagent> Reagents,
+    RecipeOutput? Output = null)
 {
     public DifficultyColor GetDifficultyAtSkill(int skill)
     {
