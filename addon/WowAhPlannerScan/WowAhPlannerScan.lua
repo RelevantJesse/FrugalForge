@@ -19,6 +19,7 @@ local function EnsureDb()
   if type(s.minQueryIntervalSeconds) ~= "number" then s.minQueryIntervalSeconds = 3 end
   if type(s.queryTimeoutSeconds) ~= "number" then s.queryTimeoutSeconds = 10 end
   if type(s.maxTimeoutRetriesPerPage) ~= "number" then s.maxTimeoutRetriesPerPage = 3 end
+  if type(s.priceRank) ~= "number" then s.priceRank = 3 end
 
   s.showPanelOnAuctionHouse = (s.showPanelOnAuctionHouse ~= false)
   s.verboseDebug = (s.verboseDebug == true)
@@ -198,6 +199,49 @@ local function ParseItemIdFromLink(link)
   return id and tonumber(id) or nil
 end
 
+local function ExtractAuctionRow(listType, index)
+  local fields = { GetAuctionItemInfo(listType, index) }
+  local auctionName = fields[1]
+  local count = tonumber(fields[3]) or 1
+
+  -- Classic clients differ in return ordering. We want minBid and buyoutPrice.
+  -- Common order:
+  -- 1 name, 2 texture, 3 count, 4 quality, 5 canUse, 6 level, 7 levelColHeader, 8 minBid, 9 minIncrement, 10 buyout, ...
+  -- Some clients include an extra header field, shifting minBid/buyout by +1.
+  local minBidIndex = 8
+  local buyoutIndex = 10
+  if type(fields[minBidIndex]) == "string" and type(fields[minBidIndex + 1]) == "number" then
+    minBidIndex = minBidIndex + 1
+    buyoutIndex = buyoutIndex + 1
+  end
+
+  local minBid = tonumber(fields[minBidIndex]) or 0
+  local buyoutPrice = tonumber(fields[buyoutIndex]) or 0
+  return auctionName, count, minBid, buyoutPrice, fields
+end
+
+local function InsertSortedLimited(list, value, maxCount)
+  if not list then return end
+  if not value or value <= 0 then return end
+  if not maxCount or maxCount < 1 then maxCount = 1 end
+
+  local inserted = false
+  for i = 1, #list do
+    if value < list[i] then
+      table.insert(list, i, value)
+      inserted = true
+      break
+    end
+  end
+  if not inserted then
+    table.insert(list, value)
+  end
+
+  while #list > maxCount do
+    table.remove(list, #list)
+  end
+end
+
 local function CanQuery()
   if not CanSendAuctionQuery then
     return true
@@ -332,16 +376,26 @@ local function StartSnapshot()
 end
 
 local function FinishSnapshot()
+  local rank = tonumber(GetSetting("priceRank", 3)) or 3
+  if rank < 1 then rank = 1 end
+
   local snapshot = {
     schema = "wowahplanner-scan-v1",
     snapshotTimestampUtc = date("!%Y-%m-%dT%H:%M:%SZ", time()),
     realmName = GetRealmName(),
     faction = UnitFactionGroup("player"),
     generatedAtEpochUtc = time(),
+    priceRank = rank,
     prices = {},
   }
 
   for itemId, entry in pairs(state.prices) do
+    if entry and type(entry.bestUnits) == "table" and #entry.bestUnits > 0 then
+      local idx = rank
+      if idx > #entry.bestUnits then idx = #entry.bestUnits end
+      entry.minUnitBuyoutCopper = entry.bestUnits[idx]
+    end
+
     table.insert(snapshot.prices, {
       itemId = itemId,
       minUnitBuyoutCopper = entry.minUnitBuyoutCopper,
@@ -699,14 +753,13 @@ local function ProcessCurrentPage()
   local idMatches = 0
   local nameMatches = 0
   local buyoutMissing = 0
+  local rank = tonumber(GetSetting("priceRank", 3)) or 3
+  if rank < 1 then rank = 1 end
 
   for i = 1, shown do
-    local auctionName, _, count, _, _, _, _, minBid, _, buyoutPrice, _, _, _, _, infoItemId = GetAuctionItemInfo("list", i)
+    local auctionName, count, minBid, buyoutPrice, _ = ExtractAuctionRow("list", i)
     local link = GetAuctionItemLink("list", i)
-    local id = infoItemId
-    if type(id) ~= "number" then
-      id = ParseItemIdFromLink(link)
-    end
+    local id = ParseItemIdFromLink(link)
 
     local isExactNameMatch = (auctionName and state.currentQueryName and auctionName == state.currentQueryName)
     local isExactIdMatch = (id == itemId)
@@ -719,24 +772,22 @@ local function ProcessCurrentPage()
     end
 
     if (isExactIdMatch or (not id and isExactNameMatch)) and count and count > 0 then
+      -- Always use buyout for pricing. Bid-only auctions are ignored to avoid underpricing.
       local price = buyoutPrice
-      if not price or price <= 0 then
-        -- Many listings are bid-only; use minBid as a fallback so we still capture usable prices.
-        price = minBid
-      end
-
       if price and price > 0 then
         local unit = math.floor(price / count)
       local entry = state.prices[itemId]
       if not entry then
-        entry = { minUnitBuyoutCopper = unit, totalQuantity = 0 }
+        entry = { minUnitBuyoutCopper = unit, totalQuantity = 0, bestUnits = {}, minSeen = unit }
         state.prices[itemId] = entry
       end
-      if unit < entry.minUnitBuyoutCopper then
-        entry.minUnitBuyoutCopper = unit
-      end
+      if unit < entry.minSeen then entry.minSeen = unit end
+      InsertSortedLimited(entry.bestUnits, unit, rank)
       entry.totalQuantity = entry.totalQuantity + count
       matched = matched + 1
+      elseif WowAhPlannerScanDB and WowAhPlannerScanDB.settings and WowAhPlannerScanDB.settings.verboseDebug and (isExactIdMatch or (not id and isExactNameMatch)) then
+        DebugPrint("No buyout for match: name=\"" .. tostring(auctionName) .. "\", count=" .. tostring(count) ..
+          ", minBid=" .. tostring(minBid) .. ", buyout=" .. tostring(buyoutPrice) .. ", linkId=" .. tostring(id))
       end
     end
   end
@@ -751,11 +802,11 @@ local function ProcessCurrentPage()
       ", queryName=\"" .. tostring(state.currentQueryName) .. "\")")
 
     if WowAhPlannerScanDB and WowAhPlannerScanDB.settings and WowAhPlannerScanDB.settings.verboseDebug and shown > 0 then
-      local n, _, c, _, _, _, _, mb, _, bo, _, _, _, _, iid = GetAuctionItemInfo("list", 1)
+      local n, c, mb, bo, fields = ExtractAuctionRow("list", 1)
       local l = GetAuctionItemLink("list", 1)
       local pid = ParseItemIdFromLink(l)
       DebugPrint("First row: name=\"" .. tostring(n) .. "\", count=" .. tostring(c) .. ", minBid=" .. tostring(mb) .. ", buyout=" .. tostring(bo) ..
-        ", infoItemId=" .. tostring(iid) .. ", linkId=" .. tostring(pid))
+        ", linkId=" .. tostring(pid) .. ", fieldsLen=" .. tostring(#fields))
     end
   else
     DebugPrint("Matched " .. tostring(matched) .. " auctions for itemId=" .. tostring(itemId) .. " on page=" .. tostring(state.page))
@@ -1200,8 +1251,28 @@ optionsFrame:SetScript("OnShow", function(self)
     WowAhPlannerScanDB.settings.verboseDebug = btn:GetChecked() and true or false
   end)
 
+  local rankSlider = CreateFrame("Slider", "WowAhPlannerScanPriceRankSlider", self, "OptionsSliderTemplate")
+  rankSlider:SetPoint("TOPLEFT", 16, -118)
+  rankSlider:SetMinMaxValues(1, 5)
+  rankSlider:SetValueStep(1)
+  rankSlider:SetObeyStepOnDrag(true)
+  rankSlider:SetWidth(300)
+  rankSlider:SetValue(GetSetting("priceRank", 3))
+  local rankValue = CreateValueLabelForSlider(rankSlider, tostring(GetSetting("priceRank", 3)))
+
+  _G[rankSlider:GetName() .. "Low"]:SetText("1")
+  _G[rankSlider:GetName() .. "High"]:SetText("5")
+  _G[rankSlider:GetName() .. "Text"]:SetText("Listing rank used for price (1=cheapest, 3=more stable)")
+
+  rankSlider:SetScript("OnValueChanged", function(_, value)
+    value = math.floor((value or 1) + 0.5)
+    if value < 1 then value = 1 end
+    WowAhPlannerScanDB.settings.priceRank = value
+    rankValue:SetText(tostring(value))
+  end)
+
   local slider = CreateFrame("Slider", "WowAhPlannerScanMaxSkillDeltaSlider", self, "OptionsSliderTemplate")
-  slider:SetPoint("TOPLEFT", 16, -120)
+  slider:SetPoint("TOPLEFT", 16, -170)
   slider:SetMinMaxValues(0, 200)
   slider:SetValueStep(5)
   slider:SetObeyStepOnDrag(true)
@@ -1220,11 +1291,11 @@ optionsFrame:SetScript("OnShow", function(self)
   end)
 
   local hint = self:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
-  hint:SetPoint("TOPLEFT", 16, -170)
+  hint:SetPoint("TOPLEFT", 16, -220)
   hint:SetText("Default is 100. Upper bound is clamped to Expansion cap.")
 
   local capSlider = CreateFrame("Slider", "WowAhPlannerScanExpansionCapSlider", self, "OptionsSliderTemplate")
-  capSlider:SetPoint("TOPLEFT", 16, -210)
+  capSlider:SetPoint("TOPLEFT", 16, -260)
   capSlider:SetMinMaxValues(75, 450)
   capSlider:SetValueStep(25)
   capSlider:SetObeyStepOnDrag(true)
@@ -1243,7 +1314,7 @@ optionsFrame:SetScript("OnShow", function(self)
   end)
 
   local pagesSlider = CreateFrame("Slider", "WowAhPlannerScanMaxPagesSlider", self, "OptionsSliderTemplate")
-  pagesSlider:SetPoint("TOPLEFT", 16, -300)
+  pagesSlider:SetPoint("TOPLEFT", 16, -350)
   pagesSlider:SetMinMaxValues(0, 50)
   pagesSlider:SetValueStep(1)
   pagesSlider:SetObeyStepOnDrag(true)
@@ -1262,7 +1333,7 @@ optionsFrame:SetScript("OnShow", function(self)
   end)
 
   local intervalSlider = CreateFrame("Slider", "WowAhPlannerScanQueryIntervalSlider", self, "OptionsSliderTemplate")
-  intervalSlider:SetPoint("TOPLEFT", 16, -390)
+  intervalSlider:SetPoint("TOPLEFT", 16, -440)
   intervalSlider:SetMinMaxValues(1, 5)
   intervalSlider:SetValueStep(1)
   intervalSlider:SetObeyStepOnDrag(true)
@@ -1281,7 +1352,7 @@ optionsFrame:SetScript("OnShow", function(self)
   end)
 
   local retriesSlider = CreateFrame("Slider", "WowAhPlannerScanTimeoutRetriesSlider", self, "OptionsSliderTemplate")
-  retriesSlider:SetPoint("TOPLEFT", 16, -480)
+  retriesSlider:SetPoint("TOPLEFT", 16, -530)
   retriesSlider:SetMinMaxValues(0, 10)
   retriesSlider:SetValueStep(1)
   retriesSlider:SetObeyStepOnDrag(true)
@@ -1300,7 +1371,7 @@ optionsFrame:SetScript("OnShow", function(self)
   end)
 
   local timeoutSlider = CreateFrame("Slider", "WowAhPlannerScanQueryTimeoutSlider", self, "OptionsSliderTemplate")
-  timeoutSlider:SetPoint("TOPLEFT", 16, -570)
+  timeoutSlider:SetPoint("TOPLEFT", 16, -620)
   timeoutSlider:SetMinMaxValues(5, 30)
   timeoutSlider:SetValueStep(1)
   timeoutSlider:SetObeyStepOnDrag(true)
