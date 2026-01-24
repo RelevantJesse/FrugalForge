@@ -248,16 +248,16 @@ local function SetBrowseExactMatch(enabled)
   return false
 end
 
-local function TrySendBrowseQueryViaUi(name)
+local function TrySendBrowseQueryViaUi(searchText, debugItemName)
   -- Some clients/UIs behave better if we drive the built-in search box/button.
-  if not name or name == "" then return false end
+  if not searchText or searchText == "" then return false end
   if not IsAtAuctionHouse() then return false end
   EnsureBrowseTab()
 
   local did = false
   if BrowseName and BrowseName.SetText then
     BrowseName:SetText("")
-    BrowseName:SetText(name)
+    BrowseName:SetText(searchText)
     did = true
   end
 
@@ -269,19 +269,19 @@ local function TrySendBrowseQueryViaUi(name)
 
   if BrowseSearchButton and BrowseSearchButton.Click then
     BrowseSearchButton:Click()
-    DebugPrint("Sent query via BrowseSearchButton: name=\"" .. tostring(name) .. "\"")
+    DebugPrint("Sent query via BrowseSearchButton: search=" .. tostring(searchText) .. ", itemName=\"" .. tostring(debugItemName) .. "\"")
     return true
   end
 
   if AuctionFrameBrowse_SearchButton and AuctionFrameBrowse_SearchButton.Click then
     AuctionFrameBrowse_SearchButton:Click()
-    DebugPrint("Sent query via AuctionFrameBrowse_SearchButton: name=\"" .. tostring(name) .. "\"")
+    DebugPrint("Sent query via AuctionFrameBrowse_SearchButton: search=" .. tostring(searchText) .. ", itemName=\"" .. tostring(debugItemName) .. "\"")
     return true
   end
 
   if AuctionFrameBrowse_Search and type(AuctionFrameBrowse_Search) == "function" then
     AuctionFrameBrowse_Search()
-    DebugPrint("Sent query via AuctionFrameBrowse_Search(): name=\"" .. tostring(name) .. "\"")
+    DebugPrint("Sent query via AuctionFrameBrowse_Search(): search=" .. tostring(searchText) .. ", itemName=\"" .. tostring(debugItemName) .. "\"")
     return true
   end
 
@@ -586,15 +586,16 @@ local function QueryCurrentPage()
     end
   end
 
-  local name = EnsureItemName(state.currentItemId)
-  if not name then
+  local itemName = EnsureItemName(state.currentItemId)
+  if not itemName then
     state.pendingItemInfoId = state.currentItemId
     DebugPrint("Item name not cached yet for itemId=" .. tostring(state.currentItemId))
     C_Timer.After(math.max(1, state.delaySeconds), QueryCurrentPage)
     return
   end
 
-  state.currentQueryName = name
+  state.currentQueryName = itemName
+  local searchText = "\"" .. tostring(itemName) .. "\""
   DebugPrint("PreQuery: atAH=" .. tostring(IsAtAuctionHouse()) ..
     ", browseVisible=" .. tostring(IsBrowseTabVisible()) ..
     ", canQuery=" .. tostring(CanQuery()) ..
@@ -605,34 +606,41 @@ local function QueryCurrentPage()
   state.lastQueryAt = GetTime()
   state.lastQueryToken = (state.lastQueryToken or 0) + 1
   local thisToken = state.lastQueryToken
-  DebugPrint("QueryAuctionItems(itemId=" .. tostring(state.currentItemId) .. ", name=\"" .. tostring(name) .. "\", page=" .. tostring(state.page) .. ")")
+  DebugPrint("QueryAuctionItems(itemId=" .. tostring(state.currentItemId) ..
+    ", itemName=\"" .. tostring(itemName) ..
+    "\", search=" .. tostring(searchText) ..
+    ", page=" .. tostring(state.page) .. ")")
 
   local sent = false
-  if state.lastSendMethod == "ui" and state.page > 0 then
-    sent = TryNextPageViaUi()
-  elseif state.page == 0 then
-    sent = TrySendBrowseQueryViaUi(name)
+
+  -- Prefer UI search with quoted term: the built-in AH search treats quotes as exact and behaves better than QueryAuctionItems on some clients.
+  if state.page == 0 then
+    sent = TrySendBrowseQueryViaUi(searchText, itemName)
     if sent then state.lastSendMethod = "ui" end
+  elseif state.lastSendMethod == "ui" then
+    sent = TryNextPageViaUi()
   end
 
   if not sent then
-    if not QueryAuctionItems then
-      Print("QueryAuctionItems is not available on this client.")
-      state.running = false
-      state.awaiting = false
-      return
+    -- Fallback to QueryAuctionItems if UI controls are missing.
+    if QueryAuctionItems then
+      -- Use explicit numeric defaults for legacy Classic clients.
+      local ok, err = pcall(QueryAuctionItems, searchText, 0, 0, 0, 0, 0, state.page, false, 0, false, true) -- exactMatch=true
+      if ok then
+        sent = true
+        state.lastSendMethod = "api"
+        DebugPrint("Sent query via QueryAuctionItems(): search=" .. tostring(searchText) .. ", page=" .. tostring(state.page) .. ", exactMatch=true")
+      else
+        DebugPrint("QueryAuctionItems error: " .. tostring(err))
+      end
     end
+  end
 
-    -- Use explicit numeric defaults for legacy Classic clients.
-    local ok, err = pcall(QueryAuctionItems, name, 0, 0, 0, 0, 0, state.page, false, 0, false, true)
-    if not ok then
-      Print("QueryAuctionItems error: " .. tostring(err))
-      state.awaiting = false
-      C_Timer.After(state.delaySeconds, QueryCurrentPage)
-      return
-    end
-    state.lastSendMethod = "api"
-    DebugPrint("Sent query via QueryAuctionItems(): name=\"" .. tostring(name) .. "\", page=" .. tostring(state.page))
+  if not sent then
+    Print("Unable to send auction query (no supported API/UI found).")
+    state.running = false
+    state.awaiting = false
+    return
   end
 
   local timeout = tonumber(GetSetting("queryTimeoutSeconds", 10)) or 10

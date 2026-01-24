@@ -130,11 +130,14 @@ public static class ApiEndpoints
             if (professionId is int pid)
             {
                 var recipes = await repo.GetRecipesAsync(v, pid, ct);
+                var craftables = BuildCraftableProducerIndex(recipes);
                 recipes = FilterRecipes(recipes, minSkill, maxSkill);
                 foreach (var reagent in recipes.SelectMany(r => r.Reagents))
                 {
-                    if (vendorItemIds.Contains(reagent.ItemId)) continue;
-                    itemIds.Add(reagent.ItemId);
+                    foreach (var leaf in ExpandBuyableLeafItemIds(reagent.ItemId, craftables, vendorItemIds))
+                    {
+                        itemIds.Add(leaf);
+                    }
                 }
             }
             else
@@ -143,11 +146,14 @@ public static class ApiEndpoints
                 foreach (var prof in professions)
                 {
                     var recipes = await repo.GetRecipesAsync(v, prof.ProfessionId, ct);
+                    var craftables = BuildCraftableProducerIndex(recipes);
                     recipes = FilterRecipes(recipes, minSkill, maxSkill);
                     foreach (var reagent in recipes.SelectMany(r => r.Reagents))
                     {
-                        if (vendorItemIds.Contains(reagent.ItemId)) continue;
-                        itemIds.Add(reagent.ItemId);
+                        foreach (var leaf in ExpandBuyableLeafItemIds(reagent.ItemId, craftables, vendorItemIds))
+                        {
+                            itemIds.Add(leaf);
+                        }
                     }
                 }
             }
@@ -180,11 +186,14 @@ public static class ApiEndpoints
             if (professionId is int pid)
             {
                 var recipes = await repo.GetRecipesAsync(v, pid, ct);
+                var craftables = BuildCraftableProducerIndex(recipes);
                 recipes = FilterRecipes(recipes, minSkill, maxSkill);
                 foreach (var reagent in recipes.SelectMany(r => r.Reagents))
                 {
-                    if (vendorItemIds.Contains(reagent.ItemId)) continue;
-                    itemIds.Add(reagent.ItemId);
+                    foreach (var leaf in ExpandBuyableLeafItemIds(reagent.ItemId, craftables, vendorItemIds))
+                    {
+                        itemIds.Add(leaf);
+                    }
                 }
             }
             else
@@ -193,11 +202,14 @@ public static class ApiEndpoints
                 foreach (var prof in professions)
                 {
                     var recipes = await repo.GetRecipesAsync(v, prof.ProfessionId, ct);
+                    var craftables = BuildCraftableProducerIndex(recipes);
                     recipes = FilterRecipes(recipes, minSkill, maxSkill);
                     foreach (var reagent in recipes.SelectMany(r => r.Reagents))
                     {
-                        if (vendorItemIds.Contains(reagent.ItemId)) continue;
-                        itemIds.Add(reagent.ItemId);
+                        foreach (var leaf in ExpandBuyableLeafItemIds(reagent.ItemId, craftables, vendorItemIds))
+                        {
+                            itemIds.Add(leaf);
+                        }
                     }
                 }
             }
@@ -229,7 +241,8 @@ public static class ApiEndpoints
             }
 
             var vendorItemIds = (await vendorPriceRepository.GetVendorPricesAsync(v, ct)).Keys.ToHashSet();
-            return Results.Text(GenerateRecipeTargetsLua(professionId, professionName, recipes, vendorItemIds), "text/plain");
+            var craftables = BuildCraftableProducerIndex(recipes);
+            return Results.Text(GenerateRecipeTargetsLua(professionId, professionName, recipes, craftables, vendorItemIds), "text/plain");
         });
 
         api.MapPost("/scans/installTargets", async (
@@ -256,7 +269,8 @@ public static class ApiEndpoints
                 ?.Name;
 
             var vendorItemIds = (await vendorPriceRepository.GetVendorPricesAsync(version, ct)).Keys.ToHashSet();
-            var lua = GenerateRecipeTargetsLua(request.ProfessionId, professionName, recipes, vendorItemIds);
+            var craftables = BuildCraftableProducerIndex(recipes);
+            var lua = GenerateRecipeTargetsLua(request.ProfessionId, professionName, recipes, craftables, vendorItemIds);
 
             var targetPath = Path.Combine(addonFolder, "WowAhPlannerScan_Targets.lua");
             try
@@ -277,12 +291,17 @@ public static class ApiEndpoints
     private static string EscapeLuaString(string value)
         => value.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal);
 
-    private static string GenerateRecipeTargetsLua(int professionId, string? professionName, IReadOnlyList<Recipe> recipes, IReadOnlySet<int> vendorItemIds)
+    private static string GenerateRecipeTargetsLua(
+        int professionId,
+        string? professionName,
+        IReadOnlyList<Recipe> recipes,
+        IReadOnlyDictionary<int, Recipe> craftables,
+        IReadOnlySet<int> vendorItemIds)
     {
         var allReagentItemIds = recipes
             .SelectMany(r => r.Reagents)
             .Select(r => r.ItemId)
-            .Where(itemId => !vendorItemIds.Contains(itemId))
+            .SelectMany(itemId => ExpandBuyableLeafItemIds(itemId, craftables, vendorItemIds))
             .Distinct()
             .OrderBy(x => x)
             .ToArray();
@@ -300,7 +319,7 @@ public static class ApiEndpoints
         {
             var reagentIds = recipe.Reagents
                 .Select(x => x.ItemId)
-                .Where(itemId => !vendorItemIds.Contains(itemId))
+                .SelectMany(itemId => ExpandBuyableLeafItemIds(itemId, craftables, vendorItemIds))
                 .Distinct()
                 .OrderBy(x => x)
                 .ToArray();
@@ -320,6 +339,74 @@ public static class ApiEndpoints
         var idx = trimmed.IndexOf('(');
         if (idx > 0) trimmed = trimmed[..idx].Trim();
         return trimmed;
+    }
+
+    private static IReadOnlyDictionary<int, Recipe> BuildCraftableProducerIndex(IReadOnlyList<Recipe> recipes)
+    {
+        var byOutput = new Dictionary<int, Recipe>();
+
+        foreach (var recipe in recipes.OrderBy(r => r.MinSkill).ThenBy(r => r.RecipeId, StringComparer.OrdinalIgnoreCase))
+        {
+            var output = recipe.Output;
+            if (output is null) continue;
+            if (output.ItemId <= 0) continue;
+            if (output.Quantity <= 0) continue;
+
+            if (!byOutput.ContainsKey(output.ItemId))
+            {
+                byOutput[output.ItemId] = recipe;
+            }
+        }
+
+        return byOutput;
+    }
+
+    private static IEnumerable<int> ExpandBuyableLeafItemIds(
+        int itemId,
+        IReadOnlyDictionary<int, Recipe> craftables,
+        IReadOnlySet<int> vendorItemIds)
+    {
+        var visited = new HashSet<int>();
+        var results = new HashSet<int>();
+        ExpandBuyableLeafItemIdsInner(itemId, craftables, vendorItemIds, visited, results);
+        return results;
+    }
+
+    private static void ExpandBuyableLeafItemIdsInner(
+        int itemId,
+        IReadOnlyDictionary<int, Recipe> craftables,
+        IReadOnlySet<int> vendorItemIds,
+        HashSet<int> visited,
+        HashSet<int> results)
+    {
+        if (vendorItemIds.Contains(itemId))
+        {
+            return;
+        }
+
+        if (!visited.Add(itemId))
+        {
+            results.Add(itemId);
+            return;
+        }
+
+        try
+        {
+            if (craftables.TryGetValue(itemId, out var producer))
+            {
+                foreach (var reagent in producer.Reagents)
+                {
+                    ExpandBuyableLeafItemIdsInner(reagent.ItemId, craftables, vendorItemIds, visited, results);
+                }
+                return;
+            }
+
+            results.Add(itemId);
+        }
+        finally
+        {
+            visited.Remove(itemId);
+        }
     }
 
     private static IReadOnlyList<Recipe> FilterRecipes(IReadOnlyList<Recipe> recipes, int? minSkill, int? maxSkill)
