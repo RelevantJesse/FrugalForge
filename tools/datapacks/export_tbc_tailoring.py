@@ -212,6 +212,23 @@ def build_tailoring_pack_from_skill_page(
 
         min_skill, orange_until, yellow_until, green_until, gray_at = _colors_to_thresholds(colors)
 
+        creates_item_id = None
+        creates_quantity = None
+        creates = entry.get("creates")
+        if isinstance(creates, list) and len(creates) >= 2:
+            try:
+                item_id = int(creates[0])
+                qty = int(creates[1])
+            except (TypeError, ValueError):
+                item_id = 0
+                qty = 0
+
+            if item_id > 0:
+                creates_item_id = item_id
+                creates_quantity = qty if qty > 0 else 1
+                if creates_item_id in item_names:
+                    reagent_item_names[creates_item_id] = item_names[creates_item_id]
+
         recipe_id = _slugify(name)
         if recipe_id in used_recipe_ids:
             recipe_id = f"{recipe_id}-{spell_id}"
@@ -238,6 +255,8 @@ def build_tailoring_pack_from_skill_page(
                 "recipeId": recipe_id,
                 "professionId": profession_id,
                 "name": name,
+                "createsItemId": creates_item_id,
+                "createsQuantity": creates_quantity,
                 "minSkill": min_skill,
                 "orangeUntil": orange_until,
                 "yellowUntil": yellow_until,
@@ -315,6 +334,14 @@ def main() -> int:
     items = _load_items_json(args.out_items_json)
     missing = 0
     for recipe in pack["recipes"]:
+        creates_item_id = recipe.get("createsItemId")
+        if isinstance(creates_item_id, int) and creates_item_id > 0 and creates_item_id not in items:
+            name = reagent_item_names.get(creates_item_id)
+            if not name:
+                missing += 1
+            else:
+                items[creates_item_id] = name
+
         for reagent in recipe["reagents"]:
             item_id = int(reagent["itemId"])
             if item_id in items:
@@ -328,6 +355,12 @@ def main() -> int:
     if missing:
         wago_names = _load_wago_item_names(args.cache_dir, user_agent=args.user_agent)
         for recipe in pack["recipes"]:
+            creates_item_id = recipe.get("createsItemId")
+            if isinstance(creates_item_id, int) and creates_item_id > 0 and creates_item_id not in items:
+                name = wago_names.get(creates_item_id)
+                if name:
+                    items[creates_item_id] = name
+
             for reagent in recipe["reagents"]:
                 item_id = int(reagent["itemId"])
                 if item_id in items:
@@ -339,6 +372,10 @@ def main() -> int:
 
         still_missing = []
         for recipe in pack["recipes"]:
+            creates_item_id = recipe.get("createsItemId")
+            if isinstance(creates_item_id, int) and creates_item_id > 0 and creates_item_id not in items:
+                still_missing.append(creates_item_id)
+
             for reagent in recipe["reagents"]:
                 item_id = int(reagent["itemId"])
                 if item_id not in items:
