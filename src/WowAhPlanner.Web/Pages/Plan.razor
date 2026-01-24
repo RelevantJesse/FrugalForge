@@ -68,7 +68,10 @@
                 <ul>
                     @foreach (var itemId in _result.MissingItemIds)
                     {
-                        <li><code>@itemId</code></li>
+                        <li>
+                            @(_itemNames.GetValueOrDefault(itemId) ?? $"Item {itemId}")
+                            <span class="badge">@itemId</span>
+                        </li>
                     }
                 </ul>
             }
@@ -195,11 +198,21 @@
 
         _result = await Planner.BuildPlanAsync(request, CancellationToken.None);
 
-        if (_result?.Plan is null) return;
+        if (_result is null) return;
 
         var items = await ItemRepository.GetItemsAsync(Selection.GameVersion, CancellationToken.None);
         var vendor = await VendorPriceRepository.GetVendorPricesAsync(Selection.GameVersion, CancellationToken.None);
-        foreach (var itemId in _result.Plan.ShoppingList.Select(s => s.ItemId).Distinct())
+
+        var idsToName = new HashSet<int>(_result.MissingItemIds);
+        if (_result.Plan is not null)
+        {
+            foreach (var id in _result.Plan.ShoppingList.Select(s => s.ItemId))
+            {
+                idsToName.Add(id);
+            }
+        }
+
+        foreach (var itemId in idsToName)
         {
             if (items.TryGetValue(itemId, out var name))
             {

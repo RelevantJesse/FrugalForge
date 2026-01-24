@@ -60,7 +60,7 @@ public sealed class PlannerService(
         var priceByItemId = snapshot.Prices.ToFrozenDictionary(kvp => kvp.Key, kvp => kvp.Value);
 
         var craftables = CraftableIndex.Build(recipes);
-        var resolver = new ReagentResolver(request.PriceMode, vendorPrices, priceByItemId, craftables);
+        var resolver = new ReagentResolver(request.PriceMode, vendorPrices, priceByItemId, craftables, request.TargetSkill);
 
         var steps = new List<PlanStep>();
         var shopping = new Dictionary<int, decimal>();
@@ -193,8 +193,10 @@ public sealed class PlannerService(
         PriceMode priceMode,
         IReadOnlyDictionary<int, long> vendorPrices,
         FrozenDictionary<int, PriceSummary> prices,
-        CraftableIndex craftables)
+        CraftableIndex craftables,
+        int craftabilitySkillCap)
     {
+        private readonly int _craftabilitySkillCap = craftabilitySkillCap;
         private readonly Dictionary<(int itemId, int skill), Money> _unitCostCache = new();
         private readonly Dictionary<(int itemId, int skill), (Recipe recipe, int outputQty)> _producerCache = new();
 
@@ -259,12 +261,18 @@ public sealed class PlannerService(
                     return true;
                 }
 
-                if (TryGetBestProducer(itemId, skill, missing, visiting, out var producer, out var outputQty, out var perUnitCost))
+                if (TryGetBestProducer(itemId, skill, missing, visiting, out var hasEligibleProducer, out var producer, out var outputQty, out var perUnitCost))
                 {
                     _producerCache[(itemId, skill)] = (producer, outputQty);
                     unitCost = perUnitCost;
                     _unitCostCache[(itemId, skill)] = unitCost;
                     return true;
+                }
+
+                if (hasEligibleProducer)
+                {
+                    unitCost = Money.Zero;
+                    return false;
                 }
 
                 if (!prices.TryGetValue(itemId, out var summary))
@@ -289,6 +297,7 @@ public sealed class PlannerService(
             int skill,
             HashSet<int> missing,
             HashSet<int> visiting,
+            out bool hasEligibleProducer,
             out Recipe producer,
             out int outputQty,
             out Money perUnitCost)
@@ -296,6 +305,7 @@ public sealed class PlannerService(
             producer = null!;
             outputQty = 0;
             perUnitCost = Money.Zero;
+            hasEligibleProducer = false;
 
             if (!craftables.TryGetProducers(itemId, out var candidates))
             {
@@ -306,9 +316,11 @@ public sealed class PlannerService(
 
             foreach (var recipe in candidates)
             {
-                if (recipe.MinSkill > skill) continue;
+                if (recipe.MinSkill > _craftabilitySkillCap) continue;
                 if (recipe.Output is null) continue;
                 if (recipe.Output.ItemId != itemId) continue;
+
+                hasEligibleProducer = true;
 
                 var qty = recipe.Output.Quantity <= 0 ? 1 : recipe.Output.Quantity;
 
@@ -365,10 +377,14 @@ public sealed class PlannerService(
             {
                 if (!_producerCache.TryGetValue((itemId, skill), out var cached))
                 {
-                    if (TryGetBestProducer(itemId, skill, missing, visiting, out var producer, out var outputQty, out _))
+                    if (TryGetBestProducer(itemId, skill, missing, visiting, out var hasEligibleProducer, out var producer, out var outputQty, out _))
                     {
                         cached = (producer, outputQty);
                         _producerCache[(itemId, skill)] = cached;
+                    }
+                    else if (hasEligibleProducer)
+                    {
+                        return;
                     }
                 }
 

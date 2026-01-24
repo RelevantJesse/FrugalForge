@@ -217,7 +217,8 @@
   },
   {
     "itemId": 2324,
-    "name": "Bleach"
+    "name": "Bleach",
+    "vendorPriceCopper": 23
   },
   {
     "itemId": 2325,
