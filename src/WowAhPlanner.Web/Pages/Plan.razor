@@ -1,6 +1,7 @@
 @page "/plan"
 @inject SelectionState Selection
 @inject WowAhPlanner.Core.Ports.IRecipeRepository RecipeRepository
+@inject WowAhPlanner.Core.Ports.IItemRepository ItemRepository
 @inject WowAhPlanner.Core.Services.PlannerService Planner
 
 <PageTitle>Plan</PageTitle>
@@ -116,7 +117,10 @@
                 @foreach (var line in _result.Plan.ShoppingList)
                 {
                     <tr>
-                        <td><code>@line.ItemId</code></td>
+                        <td>
+                            @_itemNames.GetValueOrDefault(line.ItemId) ?? $"Item {line.ItemId}"
+                            <span class="badge">@line.ItemId</span>
+                        </td>
                         <td>@line.Quantity.ToString("0.##")</td>
                         <td>@line.UnitPrice</td>
                         <td>@line.LineCost</td>
@@ -138,6 +142,7 @@
     private int _currentSkill = 1;
     private int _targetSkill = 75;
     private bool _ready;
+    private Dictionary<int, string> _itemNames = new();
 
     private PlanComputationResult? _result;
 
@@ -166,6 +171,7 @@
     private async Task GenerateAsync()
     {
         _result = null;
+        _itemNames = new Dictionary<int, string>();
 
         var request = new PlanRequest(
             RealmKey: Selection.ToRealmKey(),
@@ -175,6 +181,16 @@
             PriceMode: PriceMode.Min);
 
         _result = await Planner.BuildPlanAsync(request, CancellationToken.None);
+
+        if (_result?.Plan is null) return;
+
+        var items = await ItemRepository.GetItemsAsync(Selection.GameVersion, CancellationToken.None);
+        foreach (var itemId in _result.Plan.ShoppingList.Select(s => s.ItemId).Distinct())
+        {
+            if (items.TryGetValue(itemId, out var name))
+            {
+                _itemNames[itemId] = name;
+            }
+        }
     }
 }
-

@@ -419,3 +419,6 @@ FodyWeavers.xsd
 
 # Local SQLite (MVP)
 src/WowAhPlanner.Web/App_Data/
+
+# Local datapack caches
+.wago-cache/

@@ -28,7 +28,9 @@ public static class ServiceCollectionExtensions
         configureWorker?.Invoke(workerOptions);
         services.AddSingleton(workerOptions);
 
-        services.AddSingleton<IRecipeRepository, JsonDataPackRepository>();
+        services.AddSingleton<JsonDataPackRepository>();
+        services.AddSingleton<IRecipeRepository>(sp => sp.GetRequiredService<JsonDataPackRepository>());
+        services.AddSingleton<IItemRepository>(sp => sp.GetRequiredService<JsonDataPackRepository>());
 
         services.AddSingleton<IPriceProvider, StubJsonPriceProvider>();
         services.AddSingleton<IPriceProvider, UploadedSnapshotPriceProvider>();

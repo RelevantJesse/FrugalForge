@@ -1,15 +1,83 @@
 local ADDON_NAME = ...
+local OPTIONS_FRAME_NAME = "WowAhPlannerScanOptionsFrame"
 
-WowAhPlannerScanDB = WowAhPlannerScanDB or {}
-WowAhPlannerScanDB.settings = WowAhPlannerScanDB.settings or {}
-WowAhPlannerScanDB.settings.maxSkillDelta = WowAhPlannerScanDB.settings.maxSkillDelta or 100
-WowAhPlannerScanDB.settings.expansionCapSkill = WowAhPlannerScanDB.settings.expansionCapSkill or 350
-WowAhPlannerScanDB.settings.maxPagesPerItem = WowAhPlannerScanDB.settings.maxPagesPerItem or 10
-WowAhPlannerScanDB.settings.minQueryIntervalSeconds = WowAhPlannerScanDB.settings.minQueryIntervalSeconds or 2
-WowAhPlannerScanDB.settings.queryTimeoutSeconds = WowAhPlannerScanDB.settings.queryTimeoutSeconds or 10
+local function EnsureDb()
+  if type(WowAhPlannerScanDB) ~= "table" then
+    WowAhPlannerScanDB = {}
+  end
+  if type(WowAhPlannerScanDB.settings) ~= "table" then
+    WowAhPlannerScanDB.settings = {}
+  end
+  if type(WowAhPlannerScanDB.debugLog) ~= "table" then
+    WowAhPlannerScanDB.debugLog = {}
+  end
+
+  local s = WowAhPlannerScanDB.settings
+  if type(s.maxSkillDelta) ~= "number" then s.maxSkillDelta = 100 end
+  if type(s.expansionCapSkill) ~= "number" then s.expansionCapSkill = 350 end
+  if type(s.maxPagesPerItem) ~= "number" then s.maxPagesPerItem = 10 end
+  if type(s.minQueryIntervalSeconds) ~= "number" then s.minQueryIntervalSeconds = 3 end
+  if type(s.queryTimeoutSeconds) ~= "number" then s.queryTimeoutSeconds = 10 end
+  if type(s.maxTimeoutRetriesPerPage) ~= "number" then s.maxTimeoutRetriesPerPage = 3 end
+
+  s.showPanelOnAuctionHouse = (s.showPanelOnAuctionHouse ~= false)
+  s.verboseDebug = (s.verboseDebug == true)
+end
+
+EnsureDb()
+
+local TryRegisterOptions = nil
+
+local function AppendLog(line)
+  EnsureDb()
+  local log = WowAhPlannerScanDB.debugLog
+  if type(log) ~= "table" then
+    WowAhPlannerScanDB.debugLog = {}
+    log = WowAhPlannerScanDB.debugLog
+  end
+
+  local ts = date("%H:%M:%S", time())
+  table.insert(log, ts .. " " .. tostring(line))
+
+  local maxLines = 800
+  local extra = #log - maxLines
+  if extra > 0 then
+    for _ = 1, extra do
+      table.remove(log, 1)
+    end
+  end
+end
 
 local function Print(msg)
+  AppendLog(tostring(msg))
   DEFAULT_CHAT_FRAME:AddMessage("|cff7dd3fcWowAhPlannerScan|r: " .. tostring(msg))
+end
+
+local function DebugPrint(msg)
+  EnsureDb()
+  if WowAhPlannerScanDB and WowAhPlannerScanDB.settings and WowAhPlannerScanDB.settings.verboseDebug then
+    Print("[debug] " .. tostring(msg))
+  end
+end
+
+local function Trim(s)
+  if type(s) ~= "string" then return "" end
+  s = string.gsub(s, "^%s+", "")
+  s = string.gsub(s, "%s+$", "")
+  return s
+end
+
+local function FirstWord(s)
+  s = Trim(s or "")
+  if s == "" then return "", "" end
+  local a, b = string.match(s, "^(%S+)%s*(.*)$")
+  return (a or ""), (b or "")
+end
+
+local function GetAuctionFrame()
+  if AuctionFrame then return AuctionFrame end
+  if AuctionHouseFrame then return AuctionHouseFrame end
+  return nil
 end
 
 local function NormalizeProfessionName(name)
@@ -50,14 +118,19 @@ local state = {
   running = false,
   queue = {},
   currentItemId = nil,
+  currentQueryName = nil,
   page = 0,
   maxPages = 10,
   delaySeconds = 2.0,
   awaiting = false,
   prices = {},
+  foundAnyForItem = false,
   startedAt = nil,
   lastQueryAt = nil,
   lastQueryToken = 0,
+  timeoutRetries = 0,
+  pendingItemInfoId = nil,
+  lastSendMethod = nil, -- "ui" | "api"
 }
 
 local function GetSetting(name, defaultValue)
@@ -69,12 +142,59 @@ local function GetSetting(name, defaultValue)
 end
 
 local function IsAtAuctionHouse()
-  return AuctionFrame and AuctionFrame:IsShown()
+  local af = GetAuctionFrame()
+  return af and af.IsShown and af:IsShown() or false
+end
+
+local function EnsureBrowseTab()
+  if not IsAtAuctionHouse() then return end
+  if AuctionFrameBrowse and not AuctionFrameBrowse:IsShown() and AuctionFrameTab1 and AuctionFrameTab1.Click then
+    DebugPrint("EnsureBrowseTab(): clicking AuctionFrameTab1")
+    AuctionFrameTab1:Click()
+  end
+end
+
+local function OpenOptionsUi()
+  if TryRegisterOptions then
+    TryRegisterOptions()
+  end
+  DebugPrint("OpenOptionsUi()")
+
+  if Settings and Settings.OpenToCategory then
+    local id = WowAhPlannerScanDB and WowAhPlannerScanDB._settingsCategoryId or nil
+    if id then
+      local ok, err = pcall(Settings.OpenToCategory, id)
+      if ok then return end
+      DebugPrint("Settings.OpenToCategory(id) failed: " .. tostring(err))
+    end
+
+    do
+      local ok = pcall(Settings.OpenToCategory, "WowAhPlannerScan")
+      if ok then return end
+    end
+  end
+
+  if InterfaceOptionsFrame_OpenToCategory then
+    local frame = _G[OPTIONS_FRAME_NAME]
+    if InterfaceOptionsFrame and InterfaceOptionsFrame.Show then
+      InterfaceOptionsFrame:Show()
+    end
+    pcall(InterfaceOptionsFrame_OpenToCategory, frame or "WowAhPlannerScan")
+    pcall(InterfaceOptionsFrame_OpenToCategory, frame or "WowAhPlannerScan")
+    return
+  end
+
+  Print("Could not open options UI. Open it via the game settings AddOns list.")
+end
+
+local function IsBrowseTabVisible()
+  if not AuctionFrameBrowse then return true end
+  return AuctionFrameBrowse:IsShown() == true
 end
 
 local function ParseItemIdFromLink(link)
   if not link then return nil end
-  local id = string.match(link, "item:(%d+):")
+  local id = string.match(link, "item:(%d+)")
   return id and tonumber(id) or nil
 end
 
@@ -82,7 +202,11 @@ local function CanQuery()
   if not CanSendAuctionQuery then
     return true
   end
-  return CanSendAuctionQuery()
+  local ok, res = pcall(CanSendAuctionQuery)
+  if ok then return res end
+  ok, res = pcall(CanSendAuctionQuery, "list")
+  if ok then return res end
+  return true
 end
 
 local function EnsureItemName(itemId)
@@ -96,11 +220,81 @@ local function EnsureItemName(itemId)
   return GetItemInfo(itemId)
 end
 
+local function TrySendBrowseQueryViaUi(name)
+  -- Some clients/UIs behave better if we drive the built-in search box/button.
+  if not name or name == "" then return false end
+  if not IsAtAuctionHouse() then return false end
+  EnsureBrowseTab()
+
+  local did = false
+  if BrowseName and BrowseName.SetText then
+    BrowseName:SetText("")
+    BrowseName:SetText(name)
+    did = true
+  end
+
+  if BrowseSearchButton and BrowseSearchButton.Click then
+    BrowseSearchButton:Click()
+    DebugPrint("Sent query via BrowseSearchButton: name=\"" .. tostring(name) .. "\"")
+    return true
+  end
+
+  if AuctionFrameBrowse_SearchButton and AuctionFrameBrowse_SearchButton.Click then
+    AuctionFrameBrowse_SearchButton:Click()
+    DebugPrint("Sent query via AuctionFrameBrowse_SearchButton: name=\"" .. tostring(name) .. "\"")
+    return true
+  end
+
+  if AuctionFrameBrowse_Search and type(AuctionFrameBrowse_Search) == "function" then
+    AuctionFrameBrowse_Search()
+    DebugPrint("Sent query via AuctionFrameBrowse_Search(): name=\"" .. tostring(name) .. "\"")
+    return true
+  end
+
+  return did and false or false
+end
+
+local function IsEnabled(btn)
+  if not btn then return false end
+  if btn.IsEnabled then
+    local ok, res = pcall(btn.IsEnabled, btn)
+    if ok then return res == true or res == 1 end
+  end
+  return true
+end
+
+local function TryNextPageViaUi()
+  if not IsAtAuctionHouse() then return false end
+  EnsureBrowseTab()
+
+  local btn = BrowseNextPageButton
+  if not btn and AuctionFrameBrowse and AuctionFrameBrowse.NextPageButton then
+    btn = AuctionFrameBrowse.NextPageButton
+  end
+
+  if not btn or not btn.Click then
+    DebugPrint("Next page button not found for UI pagination.")
+    return false
+  end
+
+  if not IsEnabled(btn) then
+    DebugPrint("Next page button is disabled.")
+    return false
+  end
+
+  btn:Click()
+  DebugPrint("Sent next page via UI button (page=" .. tostring(state.page) .. ")")
+  return true
+end
+
 local function StartSnapshot()
   state.prices = {}
   state.startedAt = time()
   state.lastQueryAt = nil
   state.lastQueryToken = 0
+  state.timeoutRetries = 0
+  state.pendingItemInfoId = nil
+  state.canQueryFalseCount = 0
 end
 
 local function FinishSnapshot()
@@ -131,7 +325,7 @@ local function FinishSnapshot()
   state.queue = {}
   state.awaiting = false
 
-  Print("Scan complete. Use /wahpscan export to copy JSON.")
+  Print("Scan complete. Items priced: " .. tostring(#(snapshot.prices or {})) .. ". Use /wahpscan export to copy JSON.")
 end
 
 local function BuildExportJson()
@@ -155,11 +349,18 @@ local function BuildExportJson()
 end
 
 local exportFrame
-local function ShowExportFrame()
-  local json = BuildExportJson()
-  if not json then
-    Print("No snapshot found yet. Run /wahpscan start first.")
-    return
+local function ShowExportFrame(textOverride, titleOverride)
+  local text = textOverride
+  local titleText = titleOverride
+  if not text then
+    text = BuildExportJson()
+    titleText = titleText or "WowAhPlannerScan Export"
+    if not text then
+      Print("No snapshot found yet. Run /wahpscan start first.")
+      return
+    end
+  else
+    titleText = titleText or "WowAhPlannerScan Log"
   end
 
   if not exportFrame then
@@ -181,7 +382,7 @@ local function ShowExportFrame()
 
     local title = exportFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     title:SetPoint("TOP", 0, -16)
-    title:SetText("WowAhPlannerScan Export")
+    exportFrame.title = title
 
     local close = CreateFrame("Button", nil, exportFrame, "UIPanelCloseButton")
     close:SetPoint("TOPRIGHT", -8, -8)
@@ -201,7 +402,11 @@ local function ShowExportFrame()
     exportFrame.editBox = editBox
   end
 
-  exportFrame.editBox:SetText(json)
+  if exportFrame.title then
+    exportFrame.title:SetText(titleText)
+  end
+
+  exportFrame.editBox:SetText(text)
   exportFrame.editBox:HighlightText()
   exportFrame:Show()
 end
@@ -319,13 +524,25 @@ local function QueryCurrentPage()
     return
   end
 
+  EnsureBrowseTab()
+  if not IsBrowseTabVisible() then
+    DebugPrint("Browse tab not visible after EnsureBrowseTab()")
+  end
+
   state.maxPages = tonumber(GetSetting("maxPagesPerItem", 10)) or state.maxPages
-  state.delaySeconds = tonumber(GetSetting("minQueryIntervalSeconds", 2)) or state.delaySeconds
+  state.delaySeconds = tonumber(GetSetting("minQueryIntervalSeconds", 3)) or state.delaySeconds
 
   if not CanQuery() then
-    C_Timer.After(state.delaySeconds, QueryCurrentPage)
+    state.canQueryFalseCount = (state.canQueryFalseCount or 0) + 1
+    local wait = state.delaySeconds
+    if state.canQueryFalseCount > 1 then
+      wait = math.min(15, state.delaySeconds + (state.canQueryFalseCount - 1))
+    end
+    DebugPrint("CanSendAuctionQuery=false; waiting " .. tostring(wait) .. "s (count=" .. tostring(state.canQueryFalseCount) .. ")")
+    C_Timer.After(wait, QueryCurrentPage)
     return
   end
+  state.canQueryFalseCount = 0
 
   if state.lastQueryAt then
     local elapsed = GetTime() - state.lastQueryAt
@@ -337,25 +554,78 @@ local function QueryCurrentPage()
 
   local name = EnsureItemName(state.currentItemId)
   if not name then
-    table.insert(state.queue, state.currentItemId)
-    state.currentItemId = nil
-    C_Timer.After(state.delaySeconds, NextItem)
+    state.pendingItemInfoId = state.currentItemId
+    DebugPrint("Item name not cached yet for itemId=" .. tostring(state.currentItemId))
+    C_Timer.After(math.max(1, state.delaySeconds), QueryCurrentPage)
     return
   end
+
+  state.currentQueryName = name
+  DebugPrint("PreQuery: atAH=" .. tostring(IsAtAuctionHouse()) ..
+    ", browseVisible=" .. tostring(IsBrowseTabVisible()) ..
+    ", canQuery=" .. tostring(CanQuery()) ..
+    ", lastQueryAt=" .. tostring(state.lastQueryAt) ..
+    ", timeoutRetries=" .. tostring(state.timeoutRetries or 0))
 
   state.awaiting = true
   state.lastQueryAt = GetTime()
   state.lastQueryToken = (state.lastQueryToken or 0) + 1
   local thisToken = state.lastQueryToken
-  QueryAuctionItems(name, nil, nil, 0, 0, 0, state.page, false, nil, false, true)
+  DebugPrint("QueryAuctionItems(itemId=" .. tostring(state.currentItemId) .. ", name=\"" .. tostring(name) .. "\", page=" .. tostring(state.page) .. ")")
+
+  local sent = false
+  if state.lastSendMethod == "ui" and state.page > 0 then
+    sent = TryNextPageViaUi()
+  elseif state.page == 0 then
+    sent = TrySendBrowseQueryViaUi(name)
+    if sent then state.lastSendMethod = "ui" end
+  end
+
+  if not sent then
+    if not QueryAuctionItems then
+      Print("QueryAuctionItems is not available on this client.")
+      state.running = false
+      state.awaiting = false
+      return
+    end
+
+    -- Use explicit numeric defaults for legacy Classic clients.
+    local ok, err = pcall(QueryAuctionItems, name, 0, 0, 0, 0, 0, state.page, false, 0, false, true)
+    if not ok then
+      Print("QueryAuctionItems error: " .. tostring(err))
+      state.awaiting = false
+      C_Timer.After(state.delaySeconds, QueryCurrentPage)
+      return
+    end
+    state.lastSendMethod = "api"
+    DebugPrint("Sent query via QueryAuctionItems(): name=\"" .. tostring(name) .. "\", page=" .. tostring(state.page))
+  end
 
   local timeout = tonumber(GetSetting("queryTimeoutSeconds", 10)) or 10
   if timeout < 3 then timeout = 3 end
   C_Timer.After(timeout, function()
     if state.running and state.awaiting and state.lastQueryToken == thisToken then
       state.awaiting = false
-      Print("Query timeout (itemId=" .. tostring(state.currentItemId) .. ", page=" .. tostring(state.page) .. "). Retrying...")
-      C_Timer.After(state.delaySeconds, QueryCurrentPage)
+      state.timeoutRetries = (state.timeoutRetries or 0) + 1
+      local maxRetries = tonumber(GetSetting("maxTimeoutRetriesPerPage", 3)) or 3
+      if maxRetries < 0 then maxRetries = 0 end
+
+      if state.timeoutRetries > maxRetries then
+        Print("Query timeout (itemId=" .. tostring(state.currentItemId) ..
+          ", name=\"" .. tostring(state.currentQueryName) ..
+          "\", page=" .. tostring(state.page) ..
+          "). Skipping item after " .. tostring(maxRetries) .. " retries.")
+        state.currentItemId = nil
+        state.page = 0
+        C_Timer.After(state.delaySeconds, NextItem)
+        return
+      end
+
+      Print("Query timeout (itemId=" .. tostring(state.currentItemId) ..
+        ", name=\"" .. tostring(state.currentQueryName) ..
+        "\", page=" .. tostring(state.page) ..
+        "). Retrying (" .. tostring(state.timeoutRetries) .. "/" .. tostring(maxRetries) .. ")...")
+      C_Timer.After(state.delaySeconds * 2, QueryCurrentPage)
     end
   end)
 end
@@ -369,8 +639,12 @@ local function NextItem()
   end
 
   state.currentItemId = table.remove(state.queue, 1)
+  state.currentQueryName = nil
+  state.lastSendMethod = nil
+  state.foundAnyForItem = false
   state.page = 0
   state.awaiting = false
+  state.timeoutRetries = 0
   QueryCurrentPage()
 end
 
@@ -379,14 +653,38 @@ local function ProcessCurrentPage()
 
   local shown, total = GetNumAuctionItems("list")
   local itemId = state.currentItemId
+  local matched = 0
+  local idMatches = 0
+  local nameMatches = 0
+  local buyoutMissing = 0
 
   for i = 1, shown do
-    local _, _, count, _, _, _, _, _, buyoutPrice = GetAuctionItemInfo("list", i)
+    local auctionName, _, count, _, _, _, _, minBid, _, buyoutPrice, _, _, _, _, infoItemId = GetAuctionItemInfo("list", i)
     local link = GetAuctionItemLink("list", i)
-    local id = ParseItemIdFromLink(link)
+    local id = infoItemId
+    if type(id) ~= "number" then
+      id = ParseItemIdFromLink(link)
+    end
 
-    if id == itemId and buyoutPrice and buyoutPrice > 0 and count and count > 0 then
-      local unit = math.floor(buyoutPrice / count)
+    local isExactNameMatch = (auctionName and state.currentQueryName and auctionName == state.currentQueryName)
+    local isExactIdMatch = (id == itemId)
+
+    -- Prefer ID match; fall back to exact name match if links aren't available / parsable on this client.
+    if isExactIdMatch then idMatches = idMatches + 1 end
+    if isExactNameMatch then nameMatches = nameMatches + 1 end
+    if (isExactIdMatch or (not id and isExactNameMatch)) and (not buyoutPrice or buyoutPrice <= 0) then
+      buyoutMissing = buyoutMissing + 1
+    end
+
+    if (isExactIdMatch or (not id and isExactNameMatch)) and count and count > 0 then
+      local price = buyoutPrice
+      if not price or price <= 0 then
+        -- Many listings are bid-only; use minBid as a fallback so we still capture usable prices.
+        price = minBid
+      end
+
+      if price and price > 0 then
+        local unit = math.floor(price / count)
       local entry = state.prices[itemId]
       if not entry then
         entry = { minUnitBuyoutCopper = unit, totalQuantity = 0 }
@@ -396,12 +694,55 @@ local function ProcessCurrentPage()
         entry.minUnitBuyoutCopper = unit
       end
       entry.totalQuantity = entry.totalQuantity + count
+      matched = matched + 1
+      end
     end
   end
 
+  if matched == 0 then
+    DebugPrint("No matches found in results for itemId=" .. tostring(itemId) ..
+      " on page=" .. tostring(state.page) ..
+      " (shown=" .. tostring(shown) ..
+      ", idMatches=" .. tostring(idMatches) ..
+      ", nameMatches=" .. tostring(nameMatches) ..
+      ", buyoutMissing=" .. tostring(buyoutMissing) ..
+      ", queryName=\"" .. tostring(state.currentQueryName) .. "\")")
+
+    if WowAhPlannerScanDB and WowAhPlannerScanDB.settings and WowAhPlannerScanDB.settings.verboseDebug and shown > 0 then
+      local n, _, c, _, _, _, _, mb, _, bo, _, _, _, _, iid = GetAuctionItemInfo("list", 1)
+      local l = GetAuctionItemLink("list", 1)
+      local pid = ParseItemIdFromLink(l)
+      DebugPrint("First row: name=\"" .. tostring(n) .. "\", count=" .. tostring(c) .. ", minBid=" .. tostring(mb) .. ", buyout=" .. tostring(bo) ..
+        ", infoItemId=" .. tostring(iid) .. ", linkId=" .. tostring(pid))
+    end
+  else
+    DebugPrint("Matched " .. tostring(matched) .. " auctions for itemId=" .. tostring(itemId) .. " on page=" .. tostring(state.page))
+    state.foundAnyForItem = true
+  end
+
   local nextPageExists = total and total > (state.page + 1) * 50
+  if nextPageExists and (state.lastSendMethod == "ui") then
+    -- UI-driven searches reliably populate page 0. Some items may not appear on the first page (e.g. query matches many names).
+    -- Page forward only until we find at least one match, then stop to avoid long scans and throttling.
+    if (not state.foundAnyForItem) and state.page < state.maxPages then
+      state.page = state.page + 1
+      state.timeoutRetries = 0
+      C_Timer.After(state.delaySeconds, QueryCurrentPage)
+      return
+    end
+
+    if not state.foundAnyForItem then
+      DebugPrint("UI pagination exhausted without finding itemId=" .. tostring(itemId) .. " (maxPages=" .. tostring(state.maxPages) .. ").")
+    end
+
+    state.currentItemId = nil
+    C_Timer.After(state.delaySeconds, NextItem)
+    return
+  end
+
   if nextPageExists and state.page < state.maxPages then
     state.page = state.page + 1
+    state.timeoutRetries = 0
     C_Timer.After(state.delaySeconds, QueryCurrentPage)
   else
     state.currentItemId = nil
@@ -411,61 +752,165 @@ end
 
 local frame = CreateFrame("Frame")
 frame:RegisterEvent("AUCTION_ITEM_LIST_UPDATE")
-frame:SetScript("OnEvent", function(_, event)
+frame:RegisterEvent("GET_ITEM_INFO_RECEIVED")
+frame:RegisterEvent("UI_ERROR_MESSAGE")
+frame:SetScript("OnEvent", function(_, event, ...)
   if event == "AUCTION_ITEM_LIST_UPDATE" and state.running and state.awaiting then
     state.awaiting = false
+    state.timeoutRetries = 0
+    local shown, total = GetNumAuctionItems("list")
+    DebugPrint("AUCTION_ITEM_LIST_UPDATE: shown=" .. tostring(shown) .. ", total=" .. tostring(total) .. ", itemId=" .. tostring(state.currentItemId) .. ", page=" .. tostring(state.page))
     ProcessCurrentPage()
+    return
+  end
+
+  if event == "GET_ITEM_INFO_RECEIVED" and state.running and state.pendingItemInfoId then
+    local receivedItemId = ...
+    if not receivedItemId or receivedItemId == state.pendingItemInfoId then
+      local name = GetItemInfo(state.pendingItemInfoId)
+      if name then
+        DebugPrint("GET_ITEM_INFO_RECEIVED: itemId=" .. tostring(state.pendingItemInfoId) .. " name=\"" .. tostring(name) .. "\"")
+        state.pendingItemInfoId = nil
+        C_Timer.After(0.1, QueryCurrentPage)
+      end
+    end
+    return
+  end
+
+  if event == "UI_ERROR_MESSAGE" and state.running and state.awaiting then
+    local _, msg = ...
+    if not msg then
+      msg = ...
+    end
+    if msg then
+      DebugPrint("UI_ERROR_MESSAGE while awaiting query: " .. tostring(msg))
+    end
+    return
   end
 end)
 
+local function StartScan()
+  if not IsAtAuctionHouse() then
+    Print("Open the Auction House first.")
+    return
+  end
+
+  EnsureBrowseTab()
+  QueueItems()
+
+  if #state.queue == 0 then
+    Print("No targets loaded. Use the web app Targets page to download WowAhPlannerScan_Targets.lua, install it, then /reload.")
+    return
+  end
+
+  StartSnapshot()
+  state.running = true
+  Print("Starting scan...")
+  NextItem()
+end
+
+local function StopScan()
+  state.running = false
+  state.awaiting = false
+  state.queue = {}
+  state.currentItemId = nil
+  Print("Stopped.")
+end
+
 SLASH_WOWAHPLANNERSCAN1 = "/wahpscan"
 SlashCmdList["WOWAHPLANNERSCAN"] = function(msg)
-  msg = string.lower(msg or "")
+  EnsureDb()
+  local cmd, rest = FirstWord(msg)
+  cmd = string.lower(cmd or "")
+  rest = Trim(rest or "")
 
-  if msg == "start" then
-    if not IsAtAuctionHouse() then
-      Print("Open the Auction House first.")
+  if cmd == "start" then
+    StartScan()
+    return
+  end
+
+  if cmd == "stop" then
+    StopScan()
+    return
+  end
+
+  if cmd == "status" then
+    Print("running=" .. tostring(state.running) ..
+      ", remaining=" .. tostring(#state.queue) ..
+      ", current=" .. tostring(state.currentItemId) ..
+      ", showPanelOnAuctionHouse=" .. tostring(GetSetting("showPanelOnAuctionHouse", true)) ..
+      ", verboseDebug=" .. tostring(GetSetting("verboseDebug", false)))
+    return
+  end
+
+  if cmd == "options" then
+    OpenOptionsUi()
+    return
+  end
+
+  if cmd == "panel" then
+    if WowAhPlannerScanPanel and WowAhPlannerScanPanel:IsShown() then
+      WowAhPlannerScanPanel:Hide()
+      Print("Panel hidden.")
+    else
+      if WowAhPlannerScanPanel then
+        WowAhPlannerScanPanel:ClearAllPoints()
+        local af = GetAuctionFrame()
+        if af then
+          WowAhPlannerScanPanel:SetPoint("TOPLEFT", af, "TOPRIGHT", 12, -80)
+        else
+          WowAhPlannerScanPanel:SetPoint("CENTER")
+        end
+        WowAhPlannerScanPanel:Show()
+      end
+      Print("Panel shown.")
+    end
+    return
+  end
+
+  if cmd == "log" then
+    local log = WowAhPlannerScanDB.debugLog or {}
+    local text = table.concat(log, "\n")
+    if text == "" then
+      Print("Log is empty.")
       return
     end
-    QueueItems()
-    if #state.queue == 0 then
-      Print("No targets loaded. Use the web app Targets page to download WowAhPlannerScan_Targets.lua, install it, then /reload.")
-      return
-    end
-    StartSnapshot()
-    state.running = true
-    Print("Starting scan...")
-    NextItem()
+    ShowExportFrame(text, "WowAhPlannerScan Log")
     return
   end
 
-  if msg == "stop" then
-    state.running = false
-    state.awaiting = false
-    state.queue = {}
-    state.currentItemId = nil
-    Print("Stopped.")
+  if cmd == "clearlog" then
+    WowAhPlannerScanDB.debugLog = {}
+    Print("Log cleared.")
     return
   end
 
-  if msg == "status" then
-    Print("running=" .. tostring(state.running) .. ", remaining=" .. tostring(#state.queue) .. ", current=" .. tostring(state.currentItemId))
+  if cmd == "verbose" or cmd == "v" then
+    WowAhPlannerScanDB.settings.verboseDebug = not (WowAhPlannerScanDB.settings.verboseDebug == true)
+    Print("Verbose debug = " .. tostring(WowAhPlannerScanDB.settings.verboseDebug))
     return
   end
 
-  if msg == "options" then
-    InterfaceOptionsFrame_OpenToCategory("WowAhPlannerScan")
-    InterfaceOptionsFrame_OpenToCategory("WowAhPlannerScan")
-    return
-  end
-
-  if msg == "debug" then
+  if cmd == "debug" then
     Print("Target id=" .. tostring(WowAhPlannerScan_TargetProfessionId) .. ", name=" .. tostring(WowAhPlannerScan_TargetProfessionName))
     Print("Settings: maxSkillDelta=" .. tostring(GetSetting("maxSkillDelta", 100)) ..
       ", expansionCapSkill=" .. tostring(GetSetting("expansionCapSkill", 350)) ..
       ", maxPagesPerItem=" .. tostring(GetSetting("maxPagesPerItem", 10)) ..
-      ", minQueryIntervalSeconds=" .. tostring(GetSetting("minQueryIntervalSeconds", 2)) ..
-      ", queryTimeoutSeconds=" .. tostring(GetSetting("queryTimeoutSeconds", 10)))
+      ", minQueryIntervalSeconds=" .. tostring(GetSetting("minQueryIntervalSeconds", 3)) ..
+      ", queryTimeoutSeconds=" .. tostring(GetSetting("queryTimeoutSeconds", 10)) ..
+      ", maxTimeoutRetriesPerPage=" .. tostring(GetSetting("maxTimeoutRetriesPerPage", 3)) ..
+      ", showPanelOnAuctionHouse=" .. tostring(GetSetting("showPanelOnAuctionHouse", true)) ..
+      ", verboseDebug=" .. tostring(GetSetting("verboseDebug", false)))
+    Print("APIs: QueryAuctionItems=" .. tostring(QueryAuctionItems ~= nil) ..
+      ", CanSendAuctionQuery=" .. tostring(CanSendAuctionQuery ~= nil) ..
+      ", InterfaceOptions_AddCategory=" .. tostring(InterfaceOptions_AddCategory ~= nil) ..
+      ", Settings=" .. tostring(Settings ~= nil) ..
+      ", AuctionFrame=" .. tostring(AuctionFrame ~= nil) ..
+      ", AuctionFrameBrowse=" .. tostring(AuctionFrameBrowse ~= nil) ..
+      ", BrowseName=" .. tostring(BrowseName ~= nil) ..
+      ", BrowseSearchButton=" .. tostring(BrowseSearchButton ~= nil) ..
+      ", AuctionFrameBrowse_SearchButton=" .. tostring(AuctionFrameBrowse_SearchButton ~= nil) ..
+      ", BrowseNextPageButton=" .. tostring(BrowseNextPageButton ~= nil))
     if GetProfessions and GetProfessionInfo then
       local primary1, primary2, archaeology, fishing, cooking, firstAid = GetProfessions()
       local profs = { primary1, primary2, archaeology, fishing, cooking, firstAid }
@@ -495,22 +940,199 @@ SlashCmdList["WOWAHPLANNERSCAN"] = function(msg)
     return
   end
 
-  if msg == "export" then
+  if cmd == "export" then
     ShowExportFrame()
     return
   end
 
-  Print("Commands: /wahpscan start | stop | status | export | options | debug")
+  Print("Commands: /wahpscan start | stop | status | export | options | panel | log | clearlog | debug | verbose")
 end
+
+-- Auction House panel UI
+local backdropTemplate = BackdropTemplateMixin and "BackdropTemplate" or nil
+local panel = CreateFrame("Frame", "WowAhPlannerScanPanel", UIParent, backdropTemplate)
+panel:SetSize(240, 170)
+panel:SetFrameStrata("DIALOG")
+panel:SetFrameLevel(1000)
+panel:SetClampedToScreen(true)
+panel:Hide()
+
+if panel.SetBackdrop then
+  panel:SetBackdrop({
+    bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+    edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+    tile = true, tileSize = 32, edgeSize = 32,
+    insets = { left = 8, right = 8, top = 8, bottom = 8 }
+  })
+end
+
+panel:SetMovable(true)
+panel:EnableMouse(true)
+panel:RegisterForDrag("LeftButton")
+panel:SetScript("OnDragStart", panel.StartMoving)
+panel:SetScript("OnDragStop", panel.StopMovingOrSizing)
+
+local panelTitle = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+panelTitle:SetPoint("TOPLEFT", 12, -12)
+panelTitle:SetText("WowAhPlannerScan")
+
+local panelClose = CreateFrame("Button", nil, panel, "UIPanelCloseButton")
+panelClose:SetPoint("TOPRIGHT", -4, -4)
+
+local statusText = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+statusText:SetPoint("TOPLEFT", 12, -36)
+statusText:SetWidth(216)
+statusText:SetJustifyH("LEFT")
+statusText:SetText("Ready.")
+
+local startBtn = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+startBtn:SetPoint("TOPLEFT", 12, -62)
+startBtn:SetSize(68, 22)
+startBtn:SetText("Scan")
+startBtn:SetScript("OnClick", function() StartScan() end)
+
+local stopBtn = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+stopBtn:SetPoint("LEFT", startBtn, "RIGHT", 8, 0)
+stopBtn:SetSize(68, 22)
+stopBtn:SetText("Stop")
+stopBtn:SetScript("OnClick", function() StopScan() end)
+
+local exportBtn = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+exportBtn:SetPoint("LEFT", stopBtn, "RIGHT", 8, 0)
+exportBtn:SetSize(68, 22)
+exportBtn:SetText("Export")
+exportBtn:SetScript("OnClick", function() ShowExportFrame() end)
+
+local optionsBtn = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+optionsBtn:SetPoint("TOPLEFT", 12, -92)
+optionsBtn:SetSize(102, 22)
+optionsBtn:SetText("Options")
+optionsBtn:SetScript("OnClick", function() OpenOptionsUi() end)
+
+local logBtn = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+logBtn:SetPoint("LEFT", optionsBtn, "RIGHT", 8, 0)
+logBtn:SetSize(102, 22)
+logBtn:SetText("Log")
+logBtn:SetScript("OnClick", function()
+  local log = WowAhPlannerScanDB and WowAhPlannerScanDB.debugLog or {}
+  ShowExportFrame(table.concat(log or {}, "\n"), "WowAhPlannerScan Log")
+end)
+
+local function UpdatePanelStatus()
+  local current = state.currentItemId
+  local remaining = #state.queue
+  if state.running then
+    local canQuery = CanQuery()
+    local suffix = ""
+    if canQuery == false then
+      suffix = "\nWaiting: CanSendAuctionQuery=false"
+    end
+    statusText:SetText("Scanning...\nCurrent itemId: " .. tostring(current) .. "\nRemaining: " .. tostring(remaining) .. suffix)
+  else
+    local last = WowAhPlannerScanDB.lastSnapshot and WowAhPlannerScanDB.lastSnapshot.snapshotTimestampUtc or nil
+    if last then
+      statusText:SetText("Ready.\nLast snapshot: " .. tostring(last))
+    else
+      statusText:SetText("Ready.\nNo snapshot yet.")
+    end
+  end
+
+  if state.running then
+    startBtn:Disable()
+    stopBtn:Enable()
+  else
+    startBtn:Enable()
+    stopBtn:Disable()
+  end
+end
+
+local elapsed = 0
+panel:SetScript("OnUpdate", function(_, dt)
+  elapsed = elapsed + (dt or 0)
+  if elapsed >= 0.5 then
+    elapsed = 0
+    UpdatePanelStatus()
+  end
+end)
+
+local function ShowPanelNearAuctionHouse()
+  if not panel then return end
+  panel:ClearAllPoints()
+  local af = GetAuctionFrame()
+  if af then
+    -- Keep away from the draggable header area to avoid interfering with moving the AH window.
+    panel:SetPoint("TOPLEFT", af, "TOPRIGHT", 12, -80)
+  else
+    panel:SetPoint("CENTER")
+  end
+  UpdatePanelStatus()
+  panel:Show()
+  DebugPrint("Panel shown.")
+end
+
+local function HidePanel()
+  if not panel then return end
+  panel:Hide()
+  DebugPrint("Panel hidden.")
+end
+
+local ahEventFrame = CreateFrame("Frame")
+ahEventFrame:RegisterEvent("AUCTION_HOUSE_SHOW")
+ahEventFrame:RegisterEvent("AUCTION_HOUSE_CLOSED")
+ahEventFrame:RegisterEvent("PLAYER_LOGIN")
+ahEventFrame:SetScript("OnEvent", function(_, event)
+  EnsureDb()
+  if event == "AUCTION_HOUSE_SHOW" then
+    if WowAhPlannerScanDB.settings.showPanelOnAuctionHouse then
+      C_Timer.After(0.1, ShowPanelNearAuctionHouse)
+    end
+  elseif event == "AUCTION_HOUSE_CLOSED" then
+    HidePanel()
+  elseif event == "PLAYER_LOGIN" then
+    TryRegisterOptions()
+    -- Fallback: if the AH is already open when the player logs in/reloads.
+    if WowAhPlannerScanDB.settings.showPanelOnAuctionHouse and IsAtAuctionHouse() then
+      C_Timer.After(0.1, ShowPanelNearAuctionHouse)
+    end
+  end
+end)
 
 -- Options UI (legacy Interface Options)
 local optionsParent = InterfaceOptionsFramePanelContainer or UIParent
-local optionsFrame = CreateFrame("Frame", "WowAhPlannerScanOptionsFrame", optionsParent)
+local optionsFrame = CreateFrame("Frame", OPTIONS_FRAME_NAME, optionsParent)
 optionsFrame.name = "WowAhPlannerScan"
+
+local optionsRegistered = false
+TryRegisterOptions = function()
+  if optionsRegistered then return end
+  if InterfaceOptions_AddCategory then
+    InterfaceOptions_AddCategory(optionsFrame)
+    optionsRegistered = true
+    DebugPrint("Options registered via InterfaceOptions_AddCategory")
+  end
+  if (not optionsRegistered) and Settings and Settings.RegisterCanvasLayoutCategory and Settings.RegisterAddOnCategory then
+    local category = Settings.RegisterCanvasLayoutCategory(optionsFrame, "WowAhPlannerScan")
+    Settings.RegisterAddOnCategory(category)
+    if category and category.GetID then
+      WowAhPlannerScanDB._settingsCategoryId = category:GetID()
+    elseif category and category.ID then
+      WowAhPlannerScanDB._settingsCategoryId = category.ID
+    end
+    optionsRegistered = true
+    DebugPrint("Options registered via Settings.RegisterAddOnCategory")
+  end
+end
 
 optionsFrame:SetScript("OnShow", function(self)
   if self.initialized then return end
   self.initialized = true
+
+  local function CreateValueLabelForSlider(slider, initialText)
+    local v = self:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+    v:SetPoint("LEFT", slider, "RIGHT", 12, 0)
+    v:SetText(initialText or "")
+    return v
+  end
 
   local title = self:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
   title:SetPoint("TOPLEFT", 16, -16)
@@ -520,13 +1142,30 @@ optionsFrame:SetScript("OnShow", function(self)
   subtitle:SetPoint("TOPLEFT", 16, -40)
   subtitle:SetText("Configure the scan window used when WowAhPlannerScan_RecipeTargets is loaded.")
 
+  local showPanel = CreateFrame("CheckButton", "WowAhPlannerScanShowPanelCheckbox", self, "UICheckButtonTemplate")
+  showPanel:SetPoint("TOPLEFT", 16, -60)
+  showPanel.text:SetText("Show scan panel when Auction House opens")
+  showPanel:SetChecked(WowAhPlannerScanDB.settings.showPanelOnAuctionHouse)
+  showPanel:SetScript("OnClick", function(btn)
+    WowAhPlannerScanDB.settings.showPanelOnAuctionHouse = btn:GetChecked() and true or false
+  end)
+
+  local verbose = CreateFrame("CheckButton", "WowAhPlannerScanVerboseCheckbox", self, "UICheckButtonTemplate")
+  verbose:SetPoint("TOPLEFT", 16, -82)
+  verbose.text:SetText("Verbose debug output")
+  verbose:SetChecked(WowAhPlannerScanDB.settings.verboseDebug)
+  verbose:SetScript("OnClick", function(btn)
+    WowAhPlannerScanDB.settings.verboseDebug = btn:GetChecked() and true or false
+  end)
+
   local slider = CreateFrame("Slider", "WowAhPlannerScanMaxSkillDeltaSlider", self, "OptionsSliderTemplate")
-  slider:SetPoint("TOPLEFT", 16, -80)
+  slider:SetPoint("TOPLEFT", 16, -120)
   slider:SetMinMaxValues(0, 200)
   slider:SetValueStep(5)
   slider:SetObeyStepOnDrag(true)
   slider:SetWidth(300)
   slider:SetValue(GetSetting("maxSkillDelta", 100))
+  local sliderValue = CreateValueLabelForSlider(slider, tostring(GetSetting("maxSkillDelta", 100)))
 
   _G[slider:GetName() .. "Low"]:SetText("0")
   _G[slider:GetName() .. "High"]:SetText("200")
@@ -535,19 +1174,21 @@ optionsFrame:SetScript("OnShow", function(self)
   slider:SetScript("OnValueChanged", function(_, value)
     value = math.floor((value or 0) + 0.5)
     WowAhPlannerScanDB.settings.maxSkillDelta = value
+    sliderValue:SetText(tostring(value))
   end)
 
   local hint = self:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
-  hint:SetPoint("TOPLEFT", 16, -130)
+  hint:SetPoint("TOPLEFT", 16, -170)
   hint:SetText("Default is 100. Upper bound is clamped to Expansion cap.")
 
   local capSlider = CreateFrame("Slider", "WowAhPlannerScanExpansionCapSlider", self, "OptionsSliderTemplate")
-  capSlider:SetPoint("TOPLEFT", 16, -170)
+  capSlider:SetPoint("TOPLEFT", 16, -210)
   capSlider:SetMinMaxValues(75, 450)
   capSlider:SetValueStep(25)
   capSlider:SetObeyStepOnDrag(true)
   capSlider:SetWidth(300)
   capSlider:SetValue(GetSetting("expansionCapSkill", 350))
+  local capValue = CreateValueLabelForSlider(capSlider, tostring(GetSetting("expansionCapSkill", 350)))
 
   _G[capSlider:GetName() .. "Low"]:SetText("75")
   _G[capSlider:GetName() .. "High"]:SetText("450")
@@ -556,15 +1197,17 @@ optionsFrame:SetScript("OnShow", function(self)
   capSlider:SetScript("OnValueChanged", function(_, value)
     value = math.floor((value or 0) + 0.5)
     WowAhPlannerScanDB.settings.expansionCapSkill = value
+    capValue:SetText(tostring(value))
   end)
 
   local pagesSlider = CreateFrame("Slider", "WowAhPlannerScanMaxPagesSlider", self, "OptionsSliderTemplate")
-  pagesSlider:SetPoint("TOPLEFT", 16, -260)
+  pagesSlider:SetPoint("TOPLEFT", 16, -300)
   pagesSlider:SetMinMaxValues(0, 50)
   pagesSlider:SetValueStep(1)
   pagesSlider:SetObeyStepOnDrag(true)
   pagesSlider:SetWidth(300)
   pagesSlider:SetValue(GetSetting("maxPagesPerItem", 10))
+  local pagesValue = CreateValueLabelForSlider(pagesSlider, tostring(GetSetting("maxPagesPerItem", 10)))
 
   _G[pagesSlider:GetName() .. "Low"]:SetText("0")
   _G[pagesSlider:GetName() .. "High"]:SetText("50")
@@ -573,15 +1216,17 @@ optionsFrame:SetScript("OnShow", function(self)
   pagesSlider:SetScript("OnValueChanged", function(_, value)
     value = math.floor((value or 0) + 0.5)
     WowAhPlannerScanDB.settings.maxPagesPerItem = value
+    pagesValue:SetText(tostring(value))
   end)
 
   local intervalSlider = CreateFrame("Slider", "WowAhPlannerScanQueryIntervalSlider", self, "OptionsSliderTemplate")
-  intervalSlider:SetPoint("TOPLEFT", 16, -350)
+  intervalSlider:SetPoint("TOPLEFT", 16, -390)
   intervalSlider:SetMinMaxValues(1, 5)
   intervalSlider:SetValueStep(1)
   intervalSlider:SetObeyStepOnDrag(true)
   intervalSlider:SetWidth(300)
-  intervalSlider:SetValue(GetSetting("minQueryIntervalSeconds", 2))
+  intervalSlider:SetValue(GetSetting("minQueryIntervalSeconds", 3))
+  local intervalValue = CreateValueLabelForSlider(intervalSlider, tostring(GetSetting("minQueryIntervalSeconds", 3)) .. "s")
 
   _G[intervalSlider:GetName() .. "Low"]:SetText("1s")
   _G[intervalSlider:GetName() .. "High"]:SetText("5s")
@@ -590,15 +1235,36 @@ optionsFrame:SetScript("OnShow", function(self)
   intervalSlider:SetScript("OnValueChanged", function(_, value)
     value = math.floor((value or 0) + 0.5)
     WowAhPlannerScanDB.settings.minQueryIntervalSeconds = value
+    intervalValue:SetText(tostring(value) .. "s")
+  end)
+
+  local retriesSlider = CreateFrame("Slider", "WowAhPlannerScanTimeoutRetriesSlider", self, "OptionsSliderTemplate")
+  retriesSlider:SetPoint("TOPLEFT", 16, -480)
+  retriesSlider:SetMinMaxValues(0, 10)
+  retriesSlider:SetValueStep(1)
+  retriesSlider:SetObeyStepOnDrag(true)
+  retriesSlider:SetWidth(300)
+  retriesSlider:SetValue(GetSetting("maxTimeoutRetriesPerPage", 3))
+  local retriesValue = CreateValueLabelForSlider(retriesSlider, tostring(GetSetting("maxTimeoutRetriesPerPage", 3)))
+
+  _G[retriesSlider:GetName() .. "Low"]:SetText("0")
+  _G[retriesSlider:GetName() .. "High"]:SetText("10")
+  _G[retriesSlider:GetName() .. "Text"]:SetText("Max timeout retries (per page)")
+
+  retriesSlider:SetScript("OnValueChanged", function(_, value)
+    value = math.floor((value or 0) + 0.5)
+    WowAhPlannerScanDB.settings.maxTimeoutRetriesPerPage = value
+    retriesValue:SetText(tostring(value))
   end)
 
   local timeoutSlider = CreateFrame("Slider", "WowAhPlannerScanQueryTimeoutSlider", self, "OptionsSliderTemplate")
-  timeoutSlider:SetPoint("TOPLEFT", 16, -440)
+  timeoutSlider:SetPoint("TOPLEFT", 16, -570)
   timeoutSlider:SetMinMaxValues(5, 30)
   timeoutSlider:SetValueStep(1)
   timeoutSlider:SetObeyStepOnDrag(true)
   timeoutSlider:SetWidth(300)
   timeoutSlider:SetValue(GetSetting("queryTimeoutSeconds", 10))
+  local timeoutValue = CreateValueLabelForSlider(timeoutSlider, tostring(GetSetting("queryTimeoutSeconds", 10)) .. "s")
 
   _G[timeoutSlider:GetName() .. "Low"]:SetText("5s")
   _G[timeoutSlider:GetName() .. "High"]:SetText("30s")
@@ -607,9 +1273,8 @@ optionsFrame:SetScript("OnShow", function(self)
   timeoutSlider:SetScript("OnValueChanged", function(_, value)
     value = math.floor((value or 0) + 0.5)
     WowAhPlannerScanDB.settings.queryTimeoutSeconds = value
+    timeoutValue:SetText(tostring(value) .. "s")
   end)
 end)
 
-if InterfaceOptions_AddCategory then
-  InterfaceOptions_AddCategory(optionsFrame)
-end
+TryRegisterOptions()

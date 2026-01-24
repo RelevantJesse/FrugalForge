@@ -4,7 +4,7 @@ using System.Text.Json;
 using WowAhPlanner.Core.Domain;
 using WowAhPlanner.Core.Ports;
 
-public sealed class JsonDataPackRepository : IRecipeRepository
+public sealed class JsonDataPackRepository : IRecipeRepository, IItemRepository
 {
     private readonly Dictionary<GameVersion, IReadOnlyList<Profession>> _professionsByVersion = new();
     private readonly Dictionary<(GameVersion Version, int ProfessionId), IReadOnlyList<Recipe>> _recipes = new();
@@ -27,6 +27,19 @@ public sealed class JsonDataPackRepository : IRecipeRepository
         _recipes.TryGetValue((gameVersion, professionId), out var recipes);
         recipes ??= [];
         return Task.FromResult(recipes);
+    }
+
+    public Task<IReadOnlyDictionary<int, string>> GetItemsAsync(GameVersion gameVersion, CancellationToken cancellationToken)
+    {
+        _itemsByVersion.TryGetValue(gameVersion, out var items);
+        items ??= new Dictionary<int, string>();
+        return Task.FromResult(items);
+    }
+
+    public async Task<string?> GetItemNameAsync(GameVersion gameVersion, int itemId, CancellationToken cancellationToken)
+    {
+        var items = await GetItemsAsync(gameVersion, cancellationToken);
+        return items.TryGetValue(itemId, out var name) ? name : null;
     }
 
     private void LoadAll(string rootPath)

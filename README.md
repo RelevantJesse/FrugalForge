@@ -34,7 +34,7 @@ Then open the printed URL (default `https://localhost:5001`).
   - Note: this also includes `WowAhPlannerScan_TargetItemIds` as a fallback list
 - UI helper: `/targets` (download or install targets into your WoW AddOns folder)
 - Upload UI: `/upload` (stores prices as provider `UploadedSnapshot` in SQLite)
-- Addon skeleton + instructions: `addon/WowAhPlannerScan/WowAhPlannerScan.lua`, `docs/addon.md`
+- Addon + instructions: `addon/WowAhPlannerScan/WowAhPlannerScan.lua`, `docs/addon.md` (includes an AH panel UI and in-game options)
 
 ## Phase 2
 
