@@ -105,11 +105,13 @@
     private void RebuildUrls()
     {
         var version = Selection.GameVersion.ToString();
+        var region = Selection.Region.ToString();
+        var realmSlug = Selection.RealmSlug;
         var craft = _useCraftIntermediates ? "true" : "false";
         var smelt = _useSmeltIntermediates ? "true" : "false";
 
         _recipeTargetsUrl = Nav.ToAbsoluteUri(
-            $"/api/scans/recipeTargets.lua?version={Uri.EscapeDataString(version)}&professionId={_professionId}&useCraftIntermediates={craft}&useSmeltIntermediates={smelt}").ToString();
+            $"/api/scans/recipeTargets.lua?version={Uri.EscapeDataString(version)}&professionId={_professionId}&useCraftIntermediates={craft}&useSmeltIntermediates={smelt}&region={Uri.EscapeDataString(region)}&realmSlug={Uri.EscapeDataString(realmSlug)}").ToString();
         _itemTargetsUrl = Nav.ToAbsoluteUri(
             $"/api/scans/targets.lua?version={Uri.EscapeDataString(version)}&professionId={_professionId}&useCraftIntermediates={craft}&useSmeltIntermediates={smelt}").ToString();
     }
@@ -128,6 +130,8 @@
                 professionId = _professionId,
                 useCraftIntermediates = _useCraftIntermediates,
                 useSmeltIntermediates = _useSmeltIntermediates,
+                region = Selection.Region,
+                realmSlug = Selection.RealmSlug,
             });
             var body = await resp.Content.ReadAsStringAsync();
             _installMessage = resp.IsSuccessStatusCode ? body : $"Error: {body}";

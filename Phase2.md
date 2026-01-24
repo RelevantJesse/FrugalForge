@@ -3,7 +3,9 @@
 This app is designed around **versioned data packs** + **pluggable, failure-tolerant price providers**. To reach “all professions / all recipes” and “real-ish time AH pricing”, Phase 2 focuses on:
 
 1) a repeatable **recipe data pipeline** for Anniversary (TBC-oriented)
-2) at least one **real price ingestion** path that can refresh ~hourly and safely fall back to cached data
+2) at least one **real-ish price ingestion** path that can refresh ~hourly and safely fall back to cached data
+
+For current capabilities and lessons learned so far, see `docs/Status.md`.
 
 ## Goals (Phase 2)
 
@@ -23,11 +25,15 @@ This app is designed around **versioned data packs** + **pluggable, failure-tole
 Build a `DataPackBuilder` tool (console app) that produces:
 - `data/Anniversary/items.json`
 - `data/Anniversary/professions/*.json`
+- `data/Anniversary/producers.json` (optional: conversions like smelting / vendor transforms)
 
 Inputs should be **client-derived exports** for the target build (preferred because it is complete and consistent). The tool should accept exported tables (CSV/JSON) and perform mapping:
 - recipes/spells → profession
 - spell reagents → reagent itemIds/qty
 - required skill and difficulty thresholds
+- output item (creates itemId/qty)
+- cooldown seconds (where applicable)
+- output quality (for excluding blue+ skill-up recipes)
 
 Deliverables:
 - `tools/WowAhPlanner.DataPackBuilder` (new project)
@@ -35,29 +41,21 @@ Deliverables:
 - CI validation: builder can validate packs without needing the game installed
 
 ### 2) Real-ish time pricing ingestion
-Pick a “real” ingestion path and implement it behind `IPriceProvider`:
+Pick an ingestion path and implement it behind `IPriceProvider`:
 
-Option A (recommended for reliability): **User-uploaded snapshots**
+Option A (recommended for reliability): **User-uploaded snapshots** (already implemented)
 - Provide an endpoint/UI to upload a JSON snapshot per realm
 - Store snapshot into SQLite (so refresh doesn’t depend on the provider always being up)
-- Easy to refresh hourly with an in-game scan + small converter script
+- Support importing from SavedVariables to avoid copy/paste
 
-Option B: **TSM API** (requires API key, may not be realm-specific depending on endpoint)
+Option B: **TSM API** / other APIs (optional, behind config)
 - Implement as optional provider with explicit configuration
-- Keep StubJson available for deterministic/dev use
+- Keep `StubJson` available for deterministic/dev use
 
-Deliverables:
-- one real provider implementation + wiring
-- background worker enabled via config to refresh realms hourly
-- UI clearly shows provider + snapshot timestamp + stale/unavailable
-
-### 3) Planner + UX upgrades (from Plan.md V2 list)
+### 3) Planner + UX upgrades
 - Owned mats input (subtract from shopping list)
 - Export shopping list (CSV/text)
-- Alternative objectives toggles (gold vs crafts vs “safer”)
-
-## Current status (end of MVP)
-- Versioned data packs load from `data/{version}/...` (currently `Era` sample).
-- StubJson provider + SQLite cache works and tolerates provider failure.
-- Planner works end-to-end and fails with missing itemIds when required prices are unavailable.
+- Better intermediates UX (grouping, “how many crafts/smelts” details)
+- Better recipe acquisition hints (trainer vs drop/vendor/quest)
+- Pricing heuristics options (min vs median vs percentile / nth-cheapest)
 

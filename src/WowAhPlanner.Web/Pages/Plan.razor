@@ -255,6 +255,11 @@
             {
                 idsToName.Add(id);
             }
+
+            foreach (var id in _result.Plan.Intermediates.Select(s => s.ItemId))
+            {
+                idsToName.Add(id);
+            }
         }
 
         foreach (var itemId in idsToName)

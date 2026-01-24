@@ -394,6 +394,21 @@ local function BuildExportJsonFromSnapshot(snap)
   table.insert(parts, ',"snapshotTimestampUtc":"' .. (snap.snapshotTimestampUtc or "") .. '"')
   table.insert(parts, ',"realmName":"' .. (snap.realmName or "") .. '"')
   table.insert(parts, ',"faction":"' .. (snap.faction or "") .. '"')
+  if snap.region then
+    table.insert(parts, ',"region":"' .. tostring(snap.region) .. '"')
+  end
+  if snap.gameVersion then
+    table.insert(parts, ',"gameVersion":"' .. tostring(snap.gameVersion) .. '"')
+  end
+  if snap.realmSlug then
+    table.insert(parts, ',"realmSlug":"' .. tostring(snap.realmSlug) .. '"')
+  end
+  if snap.targetProfessionId then
+    table.insert(parts, ',"targetProfessionId":' .. tostring(snap.targetProfessionId))
+  end
+  if snap.targetProfessionName then
+    table.insert(parts, ',"targetProfessionName":"' .. tostring(snap.targetProfessionName) .. '"')
+  end
   table.insert(parts, ',"prices":[')
 
   for i, p in ipairs(snap.prices or {}) do
@@ -414,6 +429,11 @@ local function FinishSnapshot()
     snapshotTimestampUtc = date("!%Y-%m-%dT%H:%M:%SZ", time()),
     realmName = GetRealmName(),
     faction = UnitFactionGroup("player"),
+    region = WowAhPlannerScan_TargetRegion,
+    realmSlug = WowAhPlannerScan_TargetRealmSlug,
+    gameVersion = WowAhPlannerScan_TargetGameVersion,
+    targetProfessionId = WowAhPlannerScan_TargetProfessionId,
+    targetProfessionName = WowAhPlannerScan_TargetProfessionName,
     generatedAtEpochUtc = time(),
     priceRank = rank,
     prices = {},
@@ -901,14 +921,30 @@ frame:SetScript("OnEvent", function(_, event, ...)
   end
 end)
 
-local function StartScan()
+local function StartScan(queueOverride)
   if not IsAtAuctionHouse() then
     Print("Open the Auction House first.")
     return
   end
 
   EnsureBrowseTab()
-  QueueItems()
+  if type(queueOverride) == "table" then
+    state.queue = {}
+    for _, itemId in ipairs(queueOverride) do
+      if type(itemId) == "number" and itemId > 0 then
+        table.insert(state.queue, itemId)
+      end
+    end
+
+    if #state.queue == 0 then
+      Print("No valid itemIds provided.")
+      return
+    end
+
+    Print("Queued " .. tostring(#state.queue) .. " manual item(s).")
+  else
+    QueueItems()
+  end
 
   if #state.queue == 0 then
     Print("No targets loaded. Use the web app Targets page to download WowAhPlannerScan_Targets.lua, install it, then /reload.")
@@ -938,6 +974,28 @@ SlashCmdList["WOWAHPLANNERSCAN"] = function(msg)
 
   if cmd == "start" then
     StartScan()
+    return
+  end
+
+  if cmd == "item" or cmd == "scanitem" then
+    if rest == "" then
+      Print("Usage: /wahpscan item <itemId|itemLink>")
+      return
+    end
+
+    local itemId = ParseItemIdFromLink(rest)
+    if not itemId then
+      local n = tonumber(rest)
+      if n and n > 0 then itemId = n end
+    end
+
+    if not itemId or itemId <= 0 then
+      Print("Could not parse itemId from: " .. tostring(rest))
+      return
+    end
+
+    Print("Manual scan queued: itemId=" .. tostring(itemId) .. " (name=\"" .. tostring(EnsureItemName(itemId) or "") .. "\")")
+    StartScan({ itemId })
     return
   end
 
@@ -1057,7 +1115,7 @@ SlashCmdList["WOWAHPLANNERSCAN"] = function(msg)
     return
   end
 
-  Print("Commands: /wahpscan start | stop | status | export | options | panel | log | clearlog | debug | verbose")
+  Print("Commands: /wahpscan start | item <id|link> | stop | status | export | options | panel | log | clearlog | debug | verbose")
 end
 
 -- Auction House panel UI

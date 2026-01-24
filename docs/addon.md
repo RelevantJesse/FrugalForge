@@ -4,7 +4,7 @@ Your client reports:
 - `C_AuctionHouse=no`
 - `QueryAuctionItems=yes`
 
-So this addon uses the legacy Auction House query API (`QueryAuctionItems`) and scans a target list of reagent itemIds instead of scanning the entire AH.
+So the addon uses the legacy browse query API (`QueryAuctionItems`) and/or the browse UI search, and scans a **target list** of reagent itemIds (not the entire AH).
 
 ## Install
 
@@ -15,25 +15,29 @@ So this addon uses the legacy Auction House query API (`QueryAuctionItems`) and 
 
 ## Load scan targets (recommended: recipe targets)
 
-The web app can generate a Lua file containing all recipes for a profession (minSkill/grayAt + reagent itemIds). The addon then automatically limits the scan to your current skill up to `maxSkillDelta` higher (default 100), clamped to **Expansion cap skill** (default 350).
+The web app generates a Lua file containing all recipes for a profession (minSkill/grayAt + reagent itemIds). The addon then automatically limits the scan to your current skill up to `maxSkillDelta` higher (default 100), clamped to **Expansion cap skill** (default 350).
 
-- `GET /api/scans/recipeTargets.lua?version=Anniversary&professionId=197`
+- `GET /api/scans/recipeTargets.lua?version=Anniversary&professionId=197&region=US&realmSlug=dreamscythe`
 
 Save the response as:
 - `_anniversary_/Interface/AddOns/WowAhPlannerScan/WowAhPlannerScan_Targets.lua`
 
-If you're running the web app on the same machine as WoW, use the app's `/targets` page and click **Install targets** to write this file automatically.
+If you're running the web app on the same machine as WoW, use `/targets` and click **Install targets** to write this file automatically.
 
-It should define:
-- `WowAhPlannerScan_TargetProfessionId = 197`
-- `WowAhPlannerScan_TargetProfessionName = "Tailoring"` (used if your client's profession IDs differ)
-- `WowAhPlannerScan_TargetItemIds = { ... }` (full pack reagent list, used as fallback)
-- `WowAhPlannerScan_RecipeTargets = { ... }`
+The file defines (among other things):
+- `WowAhPlannerScan_TargetGameVersion`
+- `WowAhPlannerScan_TargetRegion`
+- `WowAhPlannerScan_TargetRealmSlug`
+- `WowAhPlannerScan_TargetProfessionId`
+- `WowAhPlannerScan_TargetProfessionName`
+- `WowAhPlannerScan_TargetItemIds` (fallback list)
+- `WowAhPlannerScan_RecipeTargets` (preferred list with recipe metadata)
 
-## Configure UI + scan settings
+## In-game UI + options
 
 In-game:
-- `/wahpscan options`
+- `/wahpscan options` opens Settings for the addon
+- `/wahpscan panel` shows/hides the AH scan panel
 
 Options include:
 - Show scan panel when Auction House opens
@@ -43,26 +47,42 @@ Options include:
 - Min query interval (seconds)
 - Query timeout (seconds)
 - Max timeout retries (per page)
+- Price rank (nth-cheapest listing; default 3)
+- Verbose debug output
 
-If you see repeated `Query timeout ... Retrying`, try:
-- staying on the Browse tab
-- increasing Min query interval (e.g. 4–5 seconds)
-- lowering Max pages per item (e.g. 1–3)
-- lowering Max timeout retries
+## Scan commands
 
-## Scan + export
+- Full scan from targets: `/wahpscan start`
+- Stop: `/wahpscan stop`
+- Export JSON (shows a copyable UI): `/wahpscan export`
+- Quick single-item scan: `/wahpscan item <itemId|itemLink>`
+  - Example: `/wahpscan item 14048`
 
-1) Go to an Auction House and open the AH window.
-2) Use the small **WowAhPlannerScan** panel next to the AH window (or run `/wahpscan start`).
-3) When it finishes: `/wahpscan export`
-4) Copy the JSON and paste it into the web app at `/upload`.
+Notes:
+- Searches use **quoted names** (`"Item Name"`) to force exact name searches.
+- Pricing uses **buyout only** (bid-only auctions are ignored).
 
-Troubleshooting:
+## SavedVariables workflow (no copy/paste)
+
+The addon stores the last export JSON as:
+- `WowAhPlannerScanDB.lastSnapshotJson`
+
+WoW only writes SavedVariables to disk on:
+- `/reload`
+- logout
+- exiting the game
+
+Web app flow:
+1) scan in-game
+2) `/reload`
+3) go to `/upload` and use **Import from SavedVariables**
+
+## Troubleshooting
+
 - `/wahpscan debug` prints what the addon sees (profession info + settings).
-- If `GetProfessions()` is all `nil`, the addon falls back to reading the Skills list (`GetSkillLineInfo`).
-
-## Legacy fallback (direct itemId list)
-
-If you don't want recipe targets, you can still generate a direct itemId list:
-- `GET /api/scans/targets.lua?version=Anniversary&professionId=197&currentSkill=150&maxSkillDelta=100`
+- If you see repeated `Query timeout ... Retrying`, try:
+  - staying on the Browse tab
+  - increasing Min query interval (e.g. 4–6 seconds)
+  - lowering Max pages per item (e.g. 1–3)
+  - lowering Max timeout retries
 
