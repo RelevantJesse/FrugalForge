@@ -285,9 +285,9 @@ public sealed class JsonDataPackRepository : IRecipeRepository, IItemRepository,
             if (CreatesItemId is int createsId && createsId <= 0) throw new DataPackValidationException($"Invalid createsItemId in {path} (recipeId={RecipeId}).");
             if (CreatesItemId is int && CreatesQuantity is int q && q <= 0) throw new DataPackValidationException($"Invalid createsQuantity in {path} (recipeId={RecipeId}).");
             if (OutputQuality is int oq && (oq < 0 || oq > 5)) throw new DataPackValidationException($"Invalid outputQuality in {path} (recipeId={RecipeId}).");
-            if (MinSkill < 0) throw new DataPackValidationException($"Invalid minSkill in {path} (recipeId={RecipeId}).");
+            if (MinSkill < 1) throw new DataPackValidationException($"Invalid minSkill in {path} (recipeId={RecipeId}).");
             if (CooldownSeconds is int cd && cd < 0) throw new DataPackValidationException($"Invalid cooldownSeconds in {path} (recipeId={RecipeId}).");
-            if (OrangeUntil < MinSkill) throw new DataPackValidationException($"Invalid orangeUntil in {path} (recipeId={RecipeId}).");
+            if (OrangeUntil < MinSkill - 1) throw new DataPackValidationException($"Invalid orangeUntil in {path} (recipeId={RecipeId}).");
             if (YellowUntil < OrangeUntil) throw new DataPackValidationException($"Invalid yellowUntil in {path} (recipeId={RecipeId}).");
             if (GreenUntil < YellowUntil) throw new DataPackValidationException($"Invalid greenUntil in {path} (recipeId={RecipeId}).");
             if (GrayAt <= GreenUntil) throw new DataPackValidationException($"Invalid grayAt in {path} (recipeId={RecipeId}).");

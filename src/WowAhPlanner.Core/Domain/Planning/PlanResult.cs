@@ -4,6 +4,7 @@ using WowAhPlanner.Core.Domain;
 
 public sealed record PlanResult(
     IReadOnlyList<PlanStep> Steps,
+    IReadOnlyList<PlanStepBreakdown> StepBreakdowns,
     IReadOnlyList<IntermediateLine> Intermediates,
     IReadOnlyList<ShoppingListLine> ShoppingList,
     IReadOnlyList<OwnedMaterialLine> OwnedMaterialsUsed,

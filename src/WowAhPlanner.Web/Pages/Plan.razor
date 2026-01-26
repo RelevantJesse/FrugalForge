@@ -114,11 +114,14 @@
                     <th>Chance</th>
                     <th>Expected crafts</th>
                     <th>Expected cost</th>
+                    <th>Materials</th>
                 </tr>
                 </thead>
                 <tbody>
-                @foreach (var step in _result.Plan.Steps)
+                @for (var i = 0; i < _result.Plan.Steps.Count; i++)
                 {
+                    var step = _result.Plan.Steps[i];
+                    var breakdown = _result.Plan.StepBreakdowns.Count > i ? _result.Plan.StepBreakdowns[i] : null;
                     <tr>
                         <td>@step.SkillFrom - @step.SkillTo</td>
                         <td>
@@ -135,6 +138,68 @@
                         <td>@step.SkillUpChance</td>
                         <td>@step.ExpectedCrafts.ToString("0.##")</td>
                         <td>@step.ExpectedCost.ToGscString()</td>
+                        <td>
+                            @if (breakdown is null || (breakdown.Intermediates.Count == 0 && breakdown.Acquisitions.Count == 0))
+                            {
+                                <span class="badge">n/a</span>
+                            }
+                            else
+                            {
+                                <details>
+                                    <summary>Show</summary>
+                                    @if (breakdown.Intermediates.Count > 0)
+                                    {
+                                        <div style="margin-top:0.5rem">
+                                            <div><strong>Intermediates</strong></div>
+                                            <ul>
+                                                @foreach (var line in breakdown.Intermediates)
+                                                {
+                                                    <li>
+                                                        @(_itemNames.GetValueOrDefault(line.ItemId) ?? $"Item {line.ItemId}")
+                                                        <span class="badge">@line.ItemId</span>
+                                                        <span class="badge">@line.Kind</span>
+                                                        need @line.RequiredQuantity.ToString("0.##")
+                                                        @if (line.OwnedUsedQuantity > 0)
+                                                        {
+                                                            <span>(owned @line.OwnedUsedQuantity.ToString("0.##"))</span>
+                                                        }
+                                                        @if (line.ToProduceQuantity > 0)
+                                                        {
+                                                            <span>(make @line.ToProduceQuantity.ToString("0.##"))</span>
+                                                        }
+                                                    </li>
+                                                }
+                                            </ul>
+                                        </div>
+                                    }
+                                    @if (breakdown.Acquisitions.Count > 0)
+                                    {
+                                        <div style="margin-top:0.5rem">
+                                            <div><strong>Acquire</strong></div>
+                                            <ul>
+                                                @foreach (var line in breakdown.Acquisitions)
+                                                {
+                                                    <li>
+                                                        @(_itemNames.GetValueOrDefault(line.ItemId) ?? $"Item {line.ItemId}")
+                                                        <span class="badge">@line.ItemId</span>
+                                                        <span class="badge">@(line.Source == AcquisitionSource.Vendor ? "vendor" : "AH")</span>
+                                                        need @line.RequiredQuantity.ToString("0.##")
+                                                        @if (line.OwnedUsedQuantity > 0)
+                                                        {
+                                                            <span>(owned @line.OwnedUsedQuantity.ToString("0.##"))</span>
+                                                        }
+                                                        @if (line.AcquireQuantity > 0)
+                                                        {
+                                                            <span>(get @line.AcquireQuantity.ToString("0.##"))</span>
+                                                        }
+                                                    </li>
+                                                }
+                                            </ul>
+                                        </div>
+                                    }
+                                </details>
+                            }
+                        </td>
                     </tr>
                 }
                 </tbody>
@@ -172,57 +237,34 @@
             </div>
         }
 
-        @if (_result.Plan.OwnedMaterialsUsed.Count > 0)
-        {
-            <div class="card">
-                <h3>Already owned</h3>
-                <table>
-                    <thead>
-                    <tr>
-                        <th>Item</th>
-                        <th>Quantity used</th>
-                    </tr>
-                    </thead>
-                    <tbody>
-                    @foreach (var line in _result.Plan.OwnedMaterialsUsed)
-                    {
-                        <tr>
-                            <td>
-                                @(_itemNames.GetValueOrDefault(line.ItemId) ?? $"Item {line.ItemId}")
-                                <span class="badge">@line.ItemId</span>
-                            </td>
-                            <td>@line.QuantityUsed.ToString("0.##")</td>
-                        </tr>
-                    }
-                    </tbody>
-                </table>
-            </div>
-        }
-
         <div class="card">
             <h3>Shopping list</h3>
             <table>
                 <thead>
                 <tr>
                     <th>Item</th>
-                    <th>Quantity (expected)</th>
+                    <th>Needed</th>
+                    <th>Owned</th>
+                    <th>Buy</th>
                     <th>Unit price</th>
                     <th>Line cost</th>
                 </tr>
                 </thead>
                 <tbody>
-                @foreach (var line in _result.Plan.ShoppingList)
+                @foreach (var line in _shoppingRows)
                 {
                     <tr>
                         <td>
                             @(_itemNames.GetValueOrDefault(line.ItemId) ?? $"Item {line.ItemId}")
                             <span class="badge">@line.ItemId</span>
-                            @if (_vendorItemIds.Contains(line.ItemId))
+                            @if (_vendorPricesCopper.ContainsKey(line.ItemId))
                             {
                                 <span class="badge">vendor</span>
                             }
                         </td>
-                        <td>@line.Quantity.ToString("0.##")</td>
+                        <td>@line.NeededQuantity.ToString("0.##")</td>
+                        <td>@line.OwnedQuantity.ToString("0.##")</td>
+                        <td>@line.BuyQuantity.ToString("0.##")</td>
                         <td>@line.UnitPrice.ToGscString()</td>
                         <td>@line.LineCost.ToGscString()</td>
                     </tr>
@@ -236,6 +278,13 @@
         </div>
     }
 }
+@if (!string.IsNullOrWhiteSpace(_uiError))
+{
+    <div class="card">
+        <h3>Error</h3>
+        <pre style="white-space:pre-wrap">@_uiError</pre>
+    </div>
+}
 
 @code {
     private IReadOnlyList<Profession> _professions = [];
@@ -247,9 +296,11 @@
     private bool _useOwnedMaterials = true;
     private bool _ready;
     private Dictionary<int, string> _itemNames = new();
-    private HashSet<int> _vendorItemIds = new();
+    private Dictionary<int, long> _vendorPricesCopper = new();
+    private IReadOnlyList<ShoppingRow> _shoppingRows = [];
 
     private PlanComputationResult? _result;
+    private string? _uiError;
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -276,66 +327,141 @@
     private async Task GenerateAsync()
     {
         _result = null;
+        _uiError = null;
         _itemNames = new Dictionary<int, string>();
-        _vendorItemIds = new HashSet<int>();
+        _vendorPricesCopper = new Dictionary<int, long>();
+        _shoppingRows = [];
 
-        IReadOnlyDictionary<int, long>? owned = null;
-        if (_useOwnedMaterials)
+        try
         {
-            var auth = await AuthStateProvider.GetAuthenticationStateAsync();
-            var userId = auth.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
-            if (!string.IsNullOrWhiteSpace(userId))
+            IReadOnlyDictionary<int, long>? owned = null;
+            if (_useOwnedMaterials)
             {
-                owned = await Owned.GetOwnedAsync(Selection.ToRealmKey().ToString(), userId);
+                var auth = await AuthStateProvider.GetAuthenticationStateAsync();
+                var userId = auth.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+                if (!string.IsNullOrWhiteSpace(userId))
+                {
+                    owned = await Owned.GetOwnedAsync(Selection.ToRealmKey().ToString(), userId);
+                }
+            }
+
+            var request = new PlanRequest(
+                RealmKey: Selection.ToRealmKey(),
+                ProfessionId: _professionId,
+                CurrentSkill: _currentSkill,
+                TargetSkill: _targetSkill,
+                PriceMode: PriceMode.Min,
+                UseCraftIntermediates: _useCraftIntermediates,
+                UseSmeltIntermediates: _useSmeltIntermediates,
+                OwnedMaterials: owned);
+
+            _result = await Planner.BuildPlanAsync(request, CancellationToken.None);
+
+            if (_result is null) return;
+
+            var items = await ItemRepository.GetItemsAsync(Selection.GameVersion, CancellationToken.None);
+            var vendor = await VendorPriceRepository.GetVendorPricesAsync(Selection.GameVersion, CancellationToken.None);
+            _vendorPricesCopper = vendor.ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
+
+            var idsToName = new HashSet<int>(_result.MissingItemIds);
+            if (_result.Plan is not null)
+            {
+                foreach (var id in _result.Plan.StepBreakdowns.SelectMany(x => x.Intermediates).Select(x => x.ItemId))
+                {
+                    idsToName.Add(id);
+                }
+                foreach (var id in _result.Plan.StepBreakdowns.SelectMany(x => x.Acquisitions).Select(x => x.ItemId))
+                {
+                    idsToName.Add(id);
+                }
+
+                foreach (var id in _result.Plan.ShoppingList.Select(s => s.ItemId))
+                {
+                    idsToName.Add(id);
+                }
+
+                foreach (var id in _result.Plan.Intermediates.Select(s => s.ItemId))
+                {
+                    idsToName.Add(id);
+                }
+
+                foreach (var id in _result.Plan.OwnedMaterialsUsed.Select(s => s.ItemId))
+                {
+                    idsToName.Add(id);
+                }
+
+                _shoppingRows = BuildShoppingRows(_result.Plan);
+            }
+
+            foreach (var itemId in idsToName)
+            {
+                if (items.TryGetValue(itemId, out var name))
+                {
+                    _itemNames[itemId] = name;
+                }
             }
         }
-
-        var request = new PlanRequest(
-            RealmKey: Selection.ToRealmKey(),
-            ProfessionId: _professionId,
-            CurrentSkill: _currentSkill,
-            TargetSkill: _targetSkill,
-            PriceMode: PriceMode.Min,
-            UseCraftIntermediates: _useCraftIntermediates,
-            UseSmeltIntermediates: _useSmeltIntermediates,
-            OwnedMaterials: owned);
-
-        _result = await Planner.BuildPlanAsync(request, CancellationToken.None);
-
-        if (_result is null) return;
-
-        var items = await ItemRepository.GetItemsAsync(Selection.GameVersion, CancellationToken.None);
-        var vendor = await VendorPriceRepository.GetVendorPricesAsync(Selection.GameVersion, CancellationToken.None);
-
-        var idsToName = new HashSet<int>(_result.MissingItemIds);
-        if (_result.Plan is not null)
+        catch (Exception ex)
         {
-            foreach (var id in _result.Plan.ShoppingList.Select(s => s.ItemId))
-            {
-                idsToName.Add(id);
-            }
+            _result = null;
+            _uiError = ex.ToString();
+        }
+    }
 
-            foreach (var id in _result.Plan.Intermediates.Select(s => s.ItemId))
-            {
-                idsToName.Add(id);
-            }
+    private sealed record ShoppingRow(
+        int ItemId,
+        decimal NeededQuantity,
+        decimal OwnedQuantity,
+        decimal BuyQuantity,
+        Money UnitPrice,
+        Money LineCost);
 
-            foreach (var id in _result.Plan.OwnedMaterialsUsed.Select(s => s.ItemId))
+    private IReadOnlyList<ShoppingRow> BuildShoppingRows(PlanResult plan)
+    {
+        var ownedUsedByItemId = plan.OwnedMaterialsUsed
+            .GroupBy(x => x.ItemId)
+            .ToDictionary(g => g.Key, g => g.Sum(x => x.QuantityUsed));
+
+        var buyByItemId = plan.ShoppingList.ToDictionary(x => x.ItemId, x => x);
+
+        var allItemIds = new HashSet<int>(ownedUsedByItemId.Keys);
+        foreach (var itemId in buyByItemId.Keys) allItemIds.Add(itemId);
+
+        return allItemIds
+            .OrderBy(x => x)
+            .Select(itemId =>
             {
-                idsToName.Add(id);
-            }
+                var ownedQty = ownedUsedByItemId.GetValueOrDefault(itemId);
+                var buyQty = buyByItemId.TryGetValue(itemId, out var buyLine) ? buyLine.Quantity : 0m;
+
+                var unit = buyByItemId.TryGetValue(itemId, out buyLine)
+                    ? buyLine.UnitPrice
+                    : GetUnitPrice(itemId);
+
+                var lineCost = unit * buyQty;
+                return new ShoppingRow(
+                    ItemId: itemId,
+                    NeededQuantity: ownedQty + buyQty,
+                    OwnedQuantity: ownedQty,
+                    BuyQuantity: buyQty,
+                    UnitPrice: unit,
+                    LineCost: lineCost);
+            })
+            .ToArray();
+    }
+
+    private Money GetUnitPrice(int itemId)
+    {
+        if (_vendorPricesCopper.TryGetValue(itemId, out var vendorCopper))
+        {
+            return new Money(vendorCopper);
         }
 
-        foreach (var itemId in idsToName)
+        if (_result?.PriceSnapshot.Prices.TryGetValue(itemId, out var summary) == true)
         {
-            if (items.TryGetValue(itemId, out var name))
-            {
-                _itemNames[itemId] = name;
-            }
-            if (vendor.ContainsKey(itemId))
-            {
-                _vendorItemIds.Add(itemId);
-            }
+            return new Money(summary.MinBuyoutCopper);
         }
+
+        return Money.Zero;
     }
 }

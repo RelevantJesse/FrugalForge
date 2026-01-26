@@ -57,10 +57,9 @@ builder.Services.AddWowAhPlannerInfrastructure(
         }
         else
         {
+            var contentDir = Path.Combine(builder.Environment.ContentRootPath, "data");
             var baseDir = Path.Combine(AppContext.BaseDirectory, "data");
-            o.RootPath = Directory.Exists(baseDir)
-                ? baseDir
-                : Path.Combine(builder.Environment.ContentRootPath, "data");
+            o.RootPath = Directory.Exists(contentDir) ? contentDir : baseDir;
         }
     },
     configurePricing: o =>
@@ -92,12 +91,17 @@ using (var scope = app.Services.CreateScope())
     _ = scope.ServiceProvider.GetRequiredService<IRecipeRepository>();
 }
 
-if (!app.Environment.IsDevelopment())
+var httpsEnabled = builder.Environment.IsDevelopment() || builder.Configuration.GetValue("Https:Enabled", false);
+
+if (!app.Environment.IsDevelopment() && httpsEnabled)
 {
     app.UseHsts();
 }
 
-app.UseHttpsRedirection();
+if (httpsEnabled)
+{
+    app.UseHttpsRedirection();
+}
 app.UseStaticFiles();
 app.UseRouting();
 

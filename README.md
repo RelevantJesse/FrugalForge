@@ -12,6 +12,10 @@ Blazor Server app that loads versioned profession recipe data packs, ingests auc
 
 Then open the printed URL (default `https://localhost:5001`).
 
+## Download + run (no .NET install)
+
+GitHub Releases include a self-contained build (Windows/Linux/macOS). Download the zip for your OS, extract it somewhere writable, then run the included `run` script and open `http://localhost:5000`.
+
 ## Test
 
 `dotnet test`

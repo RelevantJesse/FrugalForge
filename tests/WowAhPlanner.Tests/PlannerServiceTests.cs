@@ -59,6 +59,57 @@ public sealed class PlannerServiceTests
     }
 
     [Fact]
+    public async Task Owned_materials_change_cheapest_recipe_choice()
+    {
+        var recipes = new[]
+        {
+            new Recipe(
+                RecipeId: "uses-linen",
+                ProfessionId: 197,
+                Name: "Uses Linen",
+                MinSkill: 1,
+                OrangeUntil: 100,
+                YellowUntil: 101,
+                GreenUntil: 102,
+                GrayAt: 103,
+                Reagents: [new Reagent(2589, 1)]),
+            new Recipe(
+                RecipeId: "uses-wool",
+                ProfessionId: 197,
+                Name: "Uses Wool",
+                MinSkill: 1,
+                OrangeUntil: 100,
+                YellowUntil: 101,
+                GreenUntil: 102,
+                GrayAt: 103,
+                Reagents: [new Reagent(2592, 1)]),
+        };
+
+        var recipeRepo = new InMemoryRecipeRepository(recipes);
+        var priceService = new InMemoryPriceService(new Dictionary<int, long>
+        {
+            [2589] = 10,
+            [2592] = 999,
+        });
+        var vendorRepo = new InMemoryVendorPriceRepository(new Dictionary<int, long>());
+        var producerRepo = new InMemoryProducerRepository();
+
+        var planner = new PlannerService(recipeRepo, priceService, vendorRepo, producerRepo);
+        var result = await planner.BuildPlanAsync(
+            new PlanRequest(
+                RealmKey: new RealmKey(Region.US, GameVersion.Era, "whitemane"),
+                ProfessionId: 197,
+                CurrentSkill: 1,
+                TargetSkill: 2,
+                PriceMode: PriceMode.Min,
+                OwnedMaterials: new Dictionary<int, long> { [2592] = 999 }),
+            CancellationToken.None);
+
+        Assert.NotNull(result.Plan);
+        Assert.Equal("uses-wool", result.Plan!.Steps.Single().RecipeId);
+    }
+
+    [Fact]
     public async Task Excludes_cooldown_recipes_from_planning()
     {
         var recipes = new[]
@@ -203,6 +254,59 @@ public sealed class PlannerServiceTests
     }
 
     [Fact]
+    public async Task Step_breakdown_includes_intermediates_and_leaf_acquisitions()
+    {
+        var recipes = new[]
+        {
+            new Recipe(
+                RecipeId: "make-bolt",
+                ProfessionId: 197,
+                Name: "Bolt of Linen Cloth",
+                MinSkill: 1,
+                OrangeUntil: 0,
+                YellowUntil: 0,
+                GreenUntil: 0,
+                GrayAt: 1,
+                Reagents: [new Reagent(2589, 2)],
+                Output: new RecipeOutput(2996, 1)),
+            new Recipe(
+                RecipeId: "shirt",
+                ProfessionId: 197,
+                Name: "Brown Linen Shirt",
+                MinSkill: 1,
+                OrangeUntil: 100,
+                YellowUntil: 101,
+                GreenUntil: 102,
+                GrayAt: 103,
+                Reagents: [new Reagent(2996, 3), new Reagent(2320, 1)]),
+        };
+
+        var recipeRepo = new InMemoryRecipeRepository(recipes);
+        var priceService = new InMemoryPriceService(new Dictionary<int, long>
+        {
+            [2589] = 10,
+            [2320] = 5,
+        });
+        var vendorRepo = new InMemoryVendorPriceRepository(new Dictionary<int, long>());
+        var producerRepo = new InMemoryProducerRepository();
+
+        var planner = new PlannerService(recipeRepo, priceService, vendorRepo, producerRepo);
+        var result = await planner.BuildPlanAsync(
+            new PlanRequest(
+                RealmKey: new RealmKey(Region.US, GameVersion.Era, "whitemane"),
+                ProfessionId: 197,
+                CurrentSkill: 1,
+                TargetSkill: 2,
+                PriceMode: PriceMode.Min),
+            CancellationToken.None);
+
+        Assert.NotNull(result.Plan);
+        var breakdown = Assert.Single(result.Plan!.StepBreakdowns);
+        Assert.Contains(breakdown.Intermediates, x => x.ItemId == 2996 && x.Kind == ProducerKind.Craft && x.ToProduceQuantity > 0);
+        Assert.Contains(breakdown.Acquisitions, x => x.ItemId == 2589 && x.Source == AcquisitionSource.AuctionHouse && x.AcquireQuantity > 0);
+    }
+
+    [Fact]
     public async Task Owned_intermediate_outputs_reduce_base_material_shopping_list()
     {
         var recipes = new[]
@@ -305,6 +409,53 @@ public sealed class PlannerServiceTests
         Assert.All(
             result.Plan.Steps.Where(s => !s.RecipeName.Contains("(Intermediate)", StringComparison.OrdinalIgnoreCase)),
             s => Assert.True(s.SkillFrom >= expectedMainStartSkill));
+    }
+
+    [Fact]
+    public async Task Intermediate_credit_does_not_skip_far_beyond_gray_range()
+    {
+        var recipes = new[]
+        {
+            new Recipe(
+                RecipeId: "bolt",
+                ProfessionId: 197,
+                Name: "Bolt of Silk Cloth",
+                MinSkill: 125,
+                OrangeUntil: 134,
+                YellowUntil: 139,
+                GreenUntil: 144,
+                GrayAt: 145,
+                Reagents: [new Reagent(4306, 4)],
+                Output: new RecipeOutput(4305, 1)),
+            new Recipe(
+                RecipeId: "uses-bolt",
+                ProfessionId: 197,
+                Name: "Uses Bolt",
+                MinSkill: 125,
+                OrangeUntil: 300,
+                YellowUntil: 301,
+                GreenUntil: 302,
+                GrayAt: 303,
+                Reagents: [new Reagent(4305, 500)]),
+        };
+
+        var recipeRepo = new InMemoryRecipeRepository(recipes);
+        var priceService = new InMemoryPriceService(new Dictionary<int, long> { [4306] = 1 });
+        var vendorRepo = new InMemoryVendorPriceRepository(new Dictionary<int, long>());
+        var producerRepo = new InMemoryProducerRepository();
+
+        var planner = new PlannerService(recipeRepo, priceService, vendorRepo, producerRepo);
+        var result = await planner.BuildPlanAsync(
+            new PlanRequest(
+                RealmKey: new RealmKey(Region.US, GameVersion.Era, "whitemane"),
+                ProfessionId: 197,
+                CurrentSkill: 125,
+                TargetSkill: 300,
+                PriceMode: PriceMode.Min),
+            CancellationToken.None);
+
+        Assert.NotNull(result.Plan);
+        Assert.True(result.Plan!.SkillCreditApplied <= 20);
     }
 
     [Fact]

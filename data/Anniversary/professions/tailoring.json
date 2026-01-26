@@ -9,7 +9,7 @@
       "createsItemId": 18258,
       "createsQuantity": 1,
       "learnedByTrainer": true,
-      "minSkill": 0,
+      "minSkill": 275,
       "orangeUntil": 284,
       "yellowUntil": 289,
       "greenUntil": 294,
@@ -1586,33 +1586,6 @@
       ]
     },
     {
-      "recipeId": "spider-silk-slippers",
-      "professionId": 197,
-      "name": "Spider Silk Slippers",
-      "createsItemId": 4321,
-      "createsQuantity": 1,
-      "learnedByTrainer": false,
-      "minSkill": 140,
-      "orangeUntil": 159,
-      "yellowUntil": 174,
-      "greenUntil": 189,
-      "grayAt": 190,
-      "reagents": [
-        {
-          "itemId": 4305,
-          "qty": 3
-        },
-        {
-          "itemId": 3182,
-          "qty": 1
-        },
-        {
-          "itemId": 2321,
-          "qty": 2
-        }
-      ]
-    },
-    {
       "recipeId": "azure-silk-gloves",
       "professionId": 197,
       "name": "Azure Silk Gloves",
@@ -1777,38 +1750,7 @@
           "qty": 3
         }
       ]
-    },
-    {
-      "recipeId": "truefaith-gloves",
-      "professionId": 197,
-      "name": "Truefaith Gloves",
-      "createsItemId": 7049,
-      "createsQuantity": 1,
-      "learnedByTrainer": false,
-      "minSkill": 150,
-      "orangeUntil": 169,
-      "yellowUntil": 184,
-      "greenUntil": 199,
-      "grayAt": 200,
-      "reagents": [
-        {
-          "itemId": 4305,
-          "qty": 3
-        },
-        {
-          "itemId": 4234,
-          "qty": 2
-        },
-        {
-          "itemId": 929,
-          "qty": 4
-        },
-        {
-          "itemId": 2321,
-          "qty": 1
-        }
-      ]
-    },
+    },    
     {
       "recipeId": "dark-silk-shirt",
       "professionId": 197,

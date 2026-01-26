@@ -910,8 +910,33 @@ local function QueueItems()
     end
 
     if not skillLevel or not maxSkillLevel then
-      Print("You do not have the target profession (id=" .. tostring(professionId) .. ", name=" .. tostring(professionName) .. ").")
-      -- Fall back to WowAhPlannerScan_TargetItemIds if present.
+      Print("You do not have the target profession (id=" .. tostring(professionId) .. ", name=" .. tostring(professionName) .. "). Queueing all target reagents.")
+
+      local itemSet = {}
+      for _, r in ipairs(recipeTargets) do
+        if type(r) == "table" then
+          local reagents = r.reagents
+          if type(reagents) == "table" then
+            for _, itemId in ipairs(reagents) do
+              if type(itemId) == "number" and itemId > 0 then
+                itemSet[itemId] = true
+              end
+            end
+          end
+        end
+      end
+
+      for itemId, _ in pairs(itemSet) do
+        table.insert(state.queue, itemId)
+      end
+
+      table.sort(state.queue, function(a, b) return a < b end)
+      if #state.queue > 0 then
+        Print("Queued " .. tostring(#state.queue) .. " items from full target list.")
+        return
+      end
+
+      Print("No reagent itemIds found in targets. Falling back to WowAhPlannerScan_TargetItemIds if present.")
     else
       local cap = tonumber(GetSetting("expansionCapSkill", 350)) or 350
       if cap < skillLevel then cap = skillLevel end

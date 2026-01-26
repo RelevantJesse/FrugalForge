@@ -9,7 +9,7 @@
       "createsItemId": 8067,
       "createsQuantity": 200,
       "learnedByTrainer": true,
-      "minSkill": 0,
+      "minSkill": 1,
       "orangeUntil": 29,
       "yellowUntil": 44,
       "greenUntil": 59,
@@ -32,8 +32,8 @@
       "createsItemId": 30542,
       "createsQuantity": 1,
       "learnedByTrainer": true,
-      "minSkill": 0,
-      "orangeUntil": 349,
+      "minSkill": 350,
+      "orangeUntil": 350,
       "yellowUntil": 359,
       "greenUntil": 369,
       "grayAt": 370,
@@ -67,7 +67,7 @@
       "createsItemId": 18984,
       "createsQuantity": 1,
       "learnedByTrainer": true,
-      "minSkill": 0,
+      "minSkill": 285,
       "orangeUntil": 284,
       "yellowUntil": 294,
       "greenUntil": 304,
@@ -102,7 +102,7 @@
       "createsItemId": 10577,
       "createsQuantity": 1,
       "learnedByTrainer": true,
-      "minSkill": 0,
+      "minSkill": 225,
       "orangeUntil": 224,
       "yellowUntil": 234,
       "greenUntil": 244,
@@ -131,40 +131,13 @@
       ]
     },
     {
-      "recipeId": "the-mortar-reloaded",
-      "professionId": 202,
-      "name": "The Mortar: Reloaded",
-      "createsItemId": 10577,
-      "createsQuantity": 1,
-      "learnedByTrainer": true,
-      "minSkill": 0,
-      "orangeUntil": 0,
-      "yellowUntil": 0,
-      "greenUntil": 204,
-      "grayAt": 205,
-      "reagents": [
-        {
-          "itemId": 10577,
-          "qty": 1
-        },
-        {
-          "itemId": 3860,
-          "qty": 1
-        },
-        {
-          "itemId": 10505,
-          "qty": 3
-        }
-      ]
-    },
-    {
       "recipeId": "ultrasafe-transporter-gadgetzan",
       "professionId": 202,
       "name": "Ultrasafe Transporter - Gadgetzan",
       "createsItemId": 18986,
       "createsQuantity": 1,
       "learnedByTrainer": true,
-      "minSkill": 0,
+      "minSkill": 285,
       "orangeUntil": 284,
       "yellowUntil": 294,
       "greenUntil": 304,
@@ -203,7 +176,7 @@
       "createsItemId": 30544,
       "createsQuantity": 1,
       "learnedByTrainer": true,
-      "minSkill": 0,
+      "minSkill": 350,
       "orangeUntil": 349,
       "yellowUntil": 359,
       "greenUntil": 369,

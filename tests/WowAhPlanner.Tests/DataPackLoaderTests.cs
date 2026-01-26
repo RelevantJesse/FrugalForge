@@ -94,4 +94,50 @@ public sealed class DataPackLoaderTests
             try { Directory.Delete(root, recursive: true); } catch { }
         }
     }
+
+    [Fact]
+    public void Allows_never_orange_recipes()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "WowAhPlannerTests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+
+        try
+        {
+            var era = Path.Combine(root, "Era");
+            var professions = Path.Combine(era, "professions");
+            Directory.CreateDirectory(professions);
+
+            File.WriteAllText(
+                Path.Combine(era, "items.json"),
+                """[ { "itemId": 1, "name": "Test Item" } ]""");
+
+            File.WriteAllText(
+                Path.Combine(professions, "engineering.json"),
+                """
+                {
+                  "professionId": 202,
+                  "professionName": "Engineering",
+                  "recipes": [
+                    {
+                      "recipeId": "dimensional-ripper-area-52",
+                      "professionId": 202,
+                      "name": "Dimensional Ripper - Area 52",
+                      "minSkill": 350,
+                      "orangeUntil": 349,
+                      "yellowUntil": 359,
+                      "greenUntil": 369,
+                      "grayAt": 370,
+                      "reagents": [ { "itemId": 1, "qty": 1 } ]
+                    }
+                  ]
+                }
+                """);
+
+            _ = new JsonDataPackRepository(new DataPackOptions { RootPath = root });
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
 }

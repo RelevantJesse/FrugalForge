@@ -35,6 +35,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton(communityOptions);
         services.AddSingleton<UploadedSnapshotIngestService>();
         services.AddSingleton<OwnedMaterialsService>();
+        services.AddSingleton<PriceBrowseService>();
 
         services.AddSingleton<JsonDataPackRepository>();
         services.AddSingleton<IRecipeRepository>(sp => sp.GetRequiredService<JsonDataPackRepository>());
