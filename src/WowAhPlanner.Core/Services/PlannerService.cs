@@ -894,6 +894,12 @@ public sealed class PlannerService(
         {
             if (_vendorPrices.TryGetValue(itemId, out var vendorCopper))
             {
+                if (vendorCopper <= 0)
+                {
+                    unitPrice = Money.Zero;
+                    return false;
+                }
+
                 unitPrice = new Money(vendorCopper);
                 return true;
             }
@@ -901,7 +907,7 @@ public sealed class PlannerService(
             if (_prices.TryGetValue(itemId, out var summary))
             {
                 unitPrice = GetUnitPrice(_priceMode, summary);
-                return true;
+                return unitPrice.Copper > 0;
             }
 
             unitPrice = Money.Zero;
@@ -1112,6 +1118,13 @@ public sealed class PlannerService(
             {
                 if (_vendorPrices.TryGetValue(itemId, out var vendorCopper))
                 {
+                    if (vendorCopper <= 0)
+                    {
+                        missing.Add(itemId);
+                        unitCost = Money.Zero;
+                        return false;
+                    }
+
                     unitCost = new Money(vendorCopper);
                     _unitCostCache[(itemId, skill)] = unitCost;
                     return true;
@@ -1134,6 +1147,11 @@ public sealed class PlannerService(
 
                 var hasBuy = _prices.TryGetValue(itemId, out var summary);
                 var buyCost = hasBuy ? GetUnitPrice(_priceMode, summary!) : (Money?)null;
+                if (buyCost is { Copper: <= 0 })
+                {
+                    hasBuy = false;
+                    buyCost = null;
+                }
 
                 if (_useSmeltIntermediates &&
                     TryGetBestSmeltProducer(itemId, skill, missing, visiting, out var smeltProducer, out var smeltOutputQty, out var smeltPerUnit))

@@ -45,15 +45,12 @@ jobs:
       - name: Publish
         shell: bash
         run: |
-          dotnet publish src/WowAhPlanner.Web/WowAhPlanner.Web.csproj \
+          dotnet publish src/WowAhPlanner.WinForms/WowAhPlanner.WinForms.csproj \
             -c Release \
             -r "${{ matrix.rid }}" \
             --self-contained true \
             -o "publish/${{ matrix.rid }}" \
-            -p:UseAppHost=true \
-            /p:IncludeNativeLibrariesForSelfExtract=true \
-            -p:EnableCompressionInSingleFile=true \
-            -p:IncludeAllContentForSelfExtract=true
+            -p:UseAppHost=true
 
       - name: Add run helpers (Windows)
         shell: pwsh
@@ -61,42 +58,37 @@ jobs:
           $dir = "publish/${{ matrix.rid }}"
           @'
           @echo off
-          setlocal
-          if "%ASPNETCORE_URLS%"=="" set ASPNETCORE_URLS=http://localhost:5000
-          "%~dp0WowAhPlanner.Web.exe" %*
+          start "" "%~dp0WowAhPlanner.WinForms.exe" %*
           '@ | Out-File -FilePath (Join-Path $dir "run.cmd") -Encoding ascii
 
           @'
-          if (-not $env:ASPNETCORE_URLS) { $env:ASPNETCORE_URLS = "http://localhost:5000" }
-          & "$PSScriptRoot\WowAhPlanner.Web.exe" @args
+          Start-Process "$PSScriptRoot\WowAhPlanner.WinForms.exe" -ArgumentList $args
           '@ | Out-File -FilePath (Join-Path $dir "run.ps1") -Encoding utf8
 
           @'
           @echo off
-          taskkill /F /IM WowAhPlanner.Web.exe >nul 2>&1
-          echo Stopped WowAhPlanner.Web.exe
+          taskkill /F /IM WowAhPlanner.WinForms.exe >nul 2>&1
+          echo Stopped WowAhPlanner.WinForms.exe
           '@ | Out-File -FilePath (Join-Path $dir "stop.cmd") -Encoding ascii
 
           @'
-          WowAhPlanner - quick start
+          WowAhPlanner (WinForms) - quick start
 
           IMPORTANT:
-          - Extract the .zip first (don't run WowAhPlanner.Web.exe from inside the zip)
+          - Extract the .zip first (don't run from inside the zip)
 
-          Recommended:
-          - Double-click WowAhPlanner.Web.exe (no console window) and it will open your browser.
+          Run:
+          - Double-click WowAhPlanner.WinForms.exe
+          - Or use run.cmd / run.ps1
+          - stop.cmd terminates the app if needed
 
-          Alternatives:
-          - Run: run.cmd (console)
-          - Stop: stop.cmd
-
-          Open: http://localhost:5000
-
-          Data and databases are stored in ./App_Data next to the executable.
+          Data:
+          - Local app data (SQLite, state) is stored under %LOCALAPPDATA%\\WowAhPlanner
 
           Addon:
-          - The in-game addon is included at ./addon/WowAhPlannerScan
-          - Copy that folder into your WoW AddOns directory.
+          - The in-game addon is included at .\\addon\\WowAhPlannerScan
+          - Copy that folder into your WoW AddOns directory (e.g., ...\\World of Warcraft\\_anniversary_\\Interface\\AddOns\\)
+          - Use the app Targets page to install WowAhPlannerScan_Targets.lua into the add-on folder, then /reload in-game
           '@ | Out-File -FilePath (Join-Path $dir "README.txt") -Encoding utf8
 
       - name: Package

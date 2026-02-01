@@ -4,7 +4,7 @@
 
 - `src/WowAhPlanner.Core`: Domain models, planner algorithm, and port interfaces (no EF Core / ASP.NET dependencies).
 - `src/WowAhPlanner.Infrastructure`: SQLite EF Core persistence, caching, price providers, data pack loader, background workers.
-- `src/WowAhPlanner.Web`: Blazor Server UI and minimal API endpoints (composition root/DI).
+- `src/WowAhPlanner.WinForms`: WinForms desktop UI (composition root/DI, local state, page controls).
 - `tests/WowAhPlanner.Tests`: Unit tests (xUnit).
 - `data/{GameVersion}/`: Versioned data packs (e.g. `data/Anniversary/items.json`, `data/Anniversary/professions/tailoring.json`, `data/Anniversary/producers.json`).
 - `addon/WowAhPlannerScan`: In-game scan addon that exports price snapshots.
@@ -15,14 +15,14 @@
 
 - `dotnet build WowAhPlanner.slnx` - build the solution.
 - `dotnet test` - run all unit tests.
-- `dotnet run --project src/WowAhPlanner.Web` - run the web app locally.
+- `dotnet run --project src/WowAhPlanner.WinForms` - run the WinForms app locally.
 
 If Debug builds fail due to locked DLLs, stop the running web process or build with `-c Release`.
 
 ## Coding Style & Naming Conventions
 
 - C#: 4-space indentation; use standard .NET naming (`PascalCase` types/methods, `camelCase` locals/params).
-- Keep boundaries strict: Core must not reference Web/Infrastructure. Add dependencies via ports in `WowAhPlanner.Core.Ports` and implement them in Infrastructure.
+- Keep boundaries strict: Core must not reference UI/Infrastructure. Add dependencies via ports in `WowAhPlanner.Core.Ports` and implement them in Infrastructure. UIs (WinForms/Web) reference Core + Infrastructure.
 - JSON data packs: keep small and version-scoped; prefer stable identifiers (`recipeId`, `producerId`, `itemId`) and consistent casing.
 
 ## Testing Guidelines
@@ -38,5 +38,6 @@ If Debug builds fail due to locked DLLs, stop the running web process or build w
 
 ## Configuration & Safety Notes
 
-- Do not commit secrets or API keys. Use `src/WowAhPlanner.Web/appsettings.json` plus environment overrides/user secrets.
+- Do not commit secrets or API keys.
+- WinForms stores local app data under `%LOCALAPPDATA%\WowAhPlanner` (SQLite + JSON state).
 - Treat uploaded snapshots as untrusted input: validate schema and realm/version metadata; fail closed with clear errors.
