@@ -87,9 +87,9 @@ jobs:
           - Local app data (SQLite, state) is stored under %LOCALAPPDATA%\\WowAhPlanner
 
           Addon:
-          - The in-game addon is included at .\\addon\\ProfessionLevelerScan
-          - Copy that folder into your WoW AddOns directory (e.g., ...\\World of Warcraft\\_anniversary_\\Interface\\AddOns\\)
-          - Use the app Targets page to install ProfessionLevelerScan_Targets.lua into the add-on folder, then /reload in-game
+          - FrugalForge (includes scanner + planner)
+          - Copy .\\addon\\FrugalForge into your WoW AddOns directory (e.g., ...\\World of Warcraft\\_anniversary_\\Interface\\AddOns\\)
+          - Use /frugal to build targets, /wahpscan start to scan, then /reload
           '@ | Out-File -FilePath (Join-Path $dir "README.txt") -Encoding utf8
 
       - name: Package

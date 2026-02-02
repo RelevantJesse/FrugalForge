@@ -1,0 +1,10 @@
+## Interface: 20501
+## Title: FrugalForge
+## Notes: In-game profession planner (beta) that reads scans from ProfessionLevelerScan.
+## Author: ProfessionLeveler
+## Version: 0.2.0
+## SavedVariables: FrugalForgeDB, ProfessionLevelerScanDB, WowAhPlannerScanDB, ProfessionLevelerScan_TargetItemIds, WowAhPlannerScan_TargetItemIds
+
+FrugalForge_Data_Anniversary.lua
+FrugalForgeScan.lua
+FrugalForge.lua

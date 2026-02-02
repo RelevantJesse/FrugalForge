@@ -1,4 +1,4 @@
-# ProfessionLevelerScan addon (legacy AH API)
+# FrugalForge addon (scanner + planner)
 
 Your client reports:
 - `C_AuctionHouse=no`
@@ -8,10 +8,10 @@ So the addon uses the legacy browse query API (`QueryAuctionItems`) and/or the b
 
 ## Install
 
-1) Copy `addon/ProfessionLevelerScan` into your WoW AddOns folder:
-- `_anniversary_/Interface/AddOns/ProfessionLevelerScan`
+1) Copy `addon/FrugalForge` into your WoW AddOns folder:
+   - `_anniversary_/Interface/AddOns/FrugalForge`
 
-2) Ensure the `Interface` number in `addon/ProfessionLevelerScan/ProfessionLevelerScan.toc` matches your client build if needed.
+2) Ensure the `Interface` number in both `.toc` files matches your client build if needed.
 
 ## Load scan targets (recommended: recipe targets)
 
@@ -31,8 +31,8 @@ The file defines (among other things):
 - `ProfessionLevelerScan_TargetProfessionId`
 - `ProfessionLevelerScan_TargetProfessionName`
 - `ProfessionLevelerScan_VendorItemIds`
-- `ProfessionLevelerScan_TargetItemIds` (fallback list)
-- `ProfessionLevelerScan_RecipeTargets` (preferred list with recipe metadata)
+- `ProfessionLevelerScan_TargetItemIds` (built in-game by FrugalForge)
+- `ProfessionLevelerScan_RecipeTargets` (built in-game by FrugalForge, includes reagent quantities)
 
 ## In-game UI + options
 

@@ -116,6 +116,9 @@ internal sealed class TargetsService(
                 .ToArray();
 
             lines.Add($"  {{ recipeId = \"{EscapeLuaString(recipe.RecipeId)}\", minSkill = {recipe.MinSkill}, grayAt = {recipe.GrayAt}, reagents = {{ {string.Join(", ", reagentIds)} }} }},");
+            var reagentsWithQty = recipe.Reagents
+                .Select(x => $"{{ itemId = {x.ItemId}, qty = {x.Quantity} }}");
+            lines.Add($"  {{ recipeId = \"{EscapeLuaString(recipe.RecipeId)}\", minSkill = {recipe.MinSkill}, grayAt = {recipe.GrayAt}, reagentsWithQty = {{ {string.Join(", ", reagentsWithQty)} }} }},");
         }
 
         lines.Add("}");

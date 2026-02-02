@@ -1,43 +1,37 @@
 # Profession Leveler
 
-Windows desktop app that loads versioned profession recipe data packs, ingests auction pricing snapshots, caches price summaries in SQLite, and generates a cheapest-expected-cost profession leveling plan + shopping list.
+In-game addon suite that generates profession leveling plans using in-game scans and owned material snapshots.
 
 ## Quick start (recommended)
 
 1) Go to the repo's **Releases** page
 2) Click the latest version and download the `.zip`
 3) Extract the zip somewhere (like your Desktop) and open the extracted folder
-4) Double-click `ProfessionLeveler.exe` (or `run.cmd`)
+4) Copy the addons from the `addon/` folder into your WoW AddOns directory
 
-Data is stored under `%LOCALAPPDATA%\WowAhPlanner` (SQLite + JSON state). The `addon/ProfessionLevelerScan` folder is bundled inside the zip.
+### Install the in-game addons
 
-### Install the in-game addon
-
-1) Copy `addon/ProfessionLevelerScan/` into your WoW Anniversary AddOns folder, for example:
+1) Copy `addon/FrugalForge/` into your WoW Anniversary AddOns folder, for example:
    - `...\World of Warcraft\_anniversary_\Interface\AddOns\`
-2) In the app, open **Targets** and click **Install targets** (writes `ProfessionLevelerScan_Targets.lua` into the add-on folder).
-3) In WoW, `/reload` so the addon picks up the targets.
+2) In WoW, `/reload` so the addon initializes. Use `/frugal` to open the planner UI.
 
-### Scan + upload prices (no copy/paste)
+### Scan + prices
 
-1) In-game at the Auction House: run a scan with the addon.
+1) In-game at the Auction House: run a scan with `/wahpscan start`.
 2) `/reload` so SavedVariables are written.
-3) In the app, open **Upload**:
-   - Point to your `WTF\...\SavedVariables\ProfessionLevelerScan.lua`
-   - Click **Load + Upload** (or load into the textarea, then Upload)
+3) FrugalForge reads the scan automatically (no import/export).
 
 ### Owned materials
 
 1) In-game: `/wahpscan owned` then `/reload`.
-2) In the app, open **Owned**:
-   - Point to the same SavedVariables file (`ProfessionLevelerScan.lua`)
-   - Click **Load + Save** to store owned mats (per realm) and per-character breakdown.
+2) FrugalForge reads owned materials automatically (per-character breakdown included).
 
 ### Build a plan
 
-1) **Home**: pick Game Version, Region, Realm.
-2) **Plan**: select profession, current/target skill, price mode (Min/Median), toggle owned materials.
-3) Click **Generate plan**. Steps + shopping list will only include items with AH/vendor prices or owned coverage.
+1) `/frugal` in-game.
+2) Pick a profession and click **Build Targets**.
+3) Run a scan at the Auction House.
+4) Click **Generate Plan** in FrugalForge. Steps + shopping list use only priced or owned reagents.
 
 ## Build
 
@@ -46,10 +40,6 @@ Data is stored under `%LOCALAPPDATA%\WowAhPlanner` (SQLite + JSON state). The `a
 ## Run (local dev)
 
 `dotnet run --project src/WowAhPlanner.WinForms`
-
-## Download + run (no .NET install)
-
-GitHub Releases include a self-contained Windows build. Download the zip, extract it somewhere writable, then double-click `ProfessionLeveler.exe` (or `run.cmd`). The in-game addon is included at `addon/ProfessionLevelerScan`.
 
 ## Test
 
@@ -63,25 +53,14 @@ GitHub Releases include a self-contained Windows build. Download the zip, extrac
   - `data/Era/stub-prices.json`
   - `data/Anniversary/stub-prices.json`
 
-## In-game scanning + upload workflow (WinForms)
+## In-game workflow
 
-- Targets:
-  - App **Targets** -> **Install targets** (writes `ProfessionLevelerScan_Targets.lua` into the add-on folder).
-  - `/reload` in-game.
-- Scan:
-  - In-game AH addon: scan (default +100 skill window).
-  - `/reload` so SavedVariables are written.
-- Upload:
-  - App **Upload** -> point to `ProfessionLevelerScan.lua` -> **Load + Upload**.
+- Open `/frugal` and choose a profession.
+- Click **Build Targets** (writes targets into SavedVariables for the scanner).
+- Scan at the Auction House, then `/reload` so the snapshot is saved.
+- Use **Generate Plan** in FrugalForge.
 
 Addon docs: `docs/addon.md`
-
-## Owned materials workflow (WinForms)
-
-- In-game: `/wahpscan owned`, then `/reload`.
-- App **Owned**:
-  - Point to `ProfessionLevelerScan.lua`.
-  - **Load + Save** (stores per realm; keeps per-character breakdown so Plan can show “owned by”).
 
 ## Phase 2
 

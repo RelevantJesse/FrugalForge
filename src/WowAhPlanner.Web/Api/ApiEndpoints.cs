@@ -413,8 +413,9 @@ public static class ApiEndpoints
                 .Distinct()
                 .OrderBy(x => x)
                 .ToArray();
+            var reagentsWithQty = recipe.Reagents.Select(x => $"{{ itemId = {x.ItemId}, qty = {x.Quantity} }}");
             lines.Add(
-                $"  {{ recipeId = \"{EscapeLuaString(recipe.RecipeId)}\", minSkill = {recipe.MinSkill}, grayAt = {recipe.GrayAt}, reagents = {{ {string.Join(", ", reagentIds)} }} }},");
+                $"  {{ recipeId = \"{EscapeLuaString(recipe.RecipeId)}\", minSkill = {recipe.MinSkill}, grayAt = {recipe.GrayAt}, reagents = {{ {string.Join(", ", reagentIds)} }}, reagentsWithQty = {{ {string.Join(", ", reagentsWithQty)} }} }},");
         }
 
         lines.Add("}");
