@@ -13,32 +13,21 @@ So the addon uses the legacy browse query API (`QueryAuctionItems`) and/or the b
 
 2) Ensure the `Interface` number in both `.toc` files matches your client build if needed.
 
-## Load scan targets (recommended: recipe targets)
+## Build scan targets (in-game)
 
-The web app generates a Lua file containing all recipes for a profession (minSkill/grayAt + reagent itemIds). The addon then automatically limits the scan to your current skill up to `maxSkillDelta` higher (default 100), clamped to **Expansion cap skill** (default 350).
+FrugalForge builds the recipe target list in-game. Pick your profession, choose **Skill +**, then click **Build Targets**. The scan will automatically limit to your current skill up to `maxSkillDelta` higher (default 100), clamped to **Expansion cap skill** (default 350).
 
-- `GET /api/scans/recipeTargets.lua?version=Anniversary&professionId=197&region=US&realmSlug=dreamscythe`
-
-Save the response as:
-- `_anniversary_/Interface/AddOns/ProfessionLevelerScan/ProfessionLevelerScan_Targets.lua`
-
-If you're running the web app on the same machine as WoW, use `/targets` and click **Install targets** to write this file automatically.
-
-The file defines (among other things):
-- `ProfessionLevelerScan_TargetGameVersion`
-- `ProfessionLevelerScan_TargetRegion`
-- `ProfessionLevelerScan_TargetRealmSlug`
-- `ProfessionLevelerScan_TargetProfessionId`
-- `ProfessionLevelerScan_TargetProfessionName`
-- `ProfessionLevelerScan_VendorItemIds`
-- `ProfessionLevelerScan_TargetItemIds` (built in-game by FrugalForge)
-- `ProfessionLevelerScan_RecipeTargets` (built in-game by FrugalForge, includes reagent quantities)
+Targets are stored as:
+- `FrugalScan_TargetProfessionId`
+- `FrugalScan_TargetProfessionName`
+- `FrugalScan_TargetItemIds`
+- `FrugalScan_RecipeTargets` (includes reagent quantities)
 
 ## In-game UI + options
 
 In-game:
-- `/wahpscan options` opens Settings for the addon
-- `/wahpscan panel` shows/hides the AH scan panel
+- `/frugalscan options` opens Settings for the addon
+- `/frugalscan panel` shows/hides the AH scan panel
 
 Options include:
 - Show scan panel when Auction House opens
@@ -53,54 +42,36 @@ Options include:
 
 ## Scan commands
 
-- Full scan from targets: `/wahpscan start`
-- Stop: `/wahpscan stop`
-- Export scan JSON (shows a copyable UI): `/wahpscan export`
-- Quick single-item scan: `/wahpscan item <itemId|itemLink>` (example: `/wahpscan item 14048`)
-- Export owned materials JSON: `/wahpscan owned`
-- Owned diagnostics: `/wahpscan owneddebug`
+- Full scan from targets: `/frugalscan start`
+- Stop: `/frugalscan stop`
+- Export scan JSON (shows a copyable UI): `/frugalscan export`
+- Quick single-item scan: `/frugalscan item <itemId|itemLink>` (example: `/frugalscan item 14048`)
+- Export owned materials JSON: `/frugalscan owned`
+- Owned diagnostics: `/frugalscan owneddebug`
 
 Notes:
 - Searches use **quoted names** (`"Item Name"`) to force exact name searches.
 - Pricing uses **buyout only** (bid-only auctions are ignored).
 
-## SavedVariables workflow (no copy/paste)
+## SavedVariables notes
 
-The addon stores the last exports as:
-- `ProfessionLevelerScanDB.lastSnapshotJson`
-- `ProfessionLevelerScanDB.lastOwnedJson`
-
-WoW only writes SavedVariables to disk on:
-- `/reload`
-- logout
-- exiting the game
-
-Web app flow (prices):
-1) scan in-game
-2) `/reload`
-3) go to `/upload` and use **Import from SavedVariables**
-
-Web app flow (owned):
-1) install targets (recommended) so the addon knows which items matter
-2) `/wahpscan owned`
-3) `/reload`
-4) go to `/owned` and use **Import from SavedVariables**
+WoW only writes SavedVariables to disk on `/reload`, logout, or exit. FrugalForge reads the latest snapshots directly from memory, so no reload is needed for the planner UI.
 
 ## Owned materials notes
 
 - Owned export reads your bag/bank/mail/alt inventory from the Bagnon/BagBrother database (`BrotherBags`).
 - It only exports counts for the "wanted" itemIds:
-  - `ProfessionLevelerScan_TargetItemIds` (when present), otherwise reagent ids from `ProfessionLevelerScan_RecipeTargets`
-  - plus `ProfessionLevelerScan_VendorItemIds` (so vendor mats can be excluded from scanning but still counted as owned)
+- `FrugalScan_TargetItemIds` (when present), otherwise reagent ids from `FrugalScan_RecipeTargets`
+- plus `FrugalScan_VendorItemIds` (so vendor mats can be excluded from scanning but still counted as owned)
 
 ## Troubleshooting
 
-- `/wahpscan debug` prints what the addon sees (profession info + settings).
+- `/frugalscan debug` prints what the addon sees (profession info + settings).
 - If you see repeated `Query timeout ... Retrying`, try:
   - staying on the Browse tab
   - increasing Min query interval (e.g. 4-6 seconds)
   - lowering Max pages per item (e.g. 1-3)
   - lowering Max timeout retries
 - If owned export says it can't find your bag DB:
-  - run `/wahpscan owneddebug`
+  - run `/frugalscan owneddebug`
   - confirm `BagBrother` is enabled and then `/reload`

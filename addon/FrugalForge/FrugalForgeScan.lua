@@ -2,12 +2,12 @@ local ADDON_NAME = ...
 local OPTIONS_FRAME_NAME = "ProfessionLevelerScanOptionsFrame"
 
 local function BridgeSavedVariables()
-  ProfessionLevelerScanDB = ProfessionLevelerScanDB or WowAhPlannerScanDB
-  WowAhPlannerScanDB = ProfessionLevelerScanDB or {}
+  ProfessionLevelerScanDB = ProfessionLevelerScanDB or FrugalScanDB
+  FrugalScanDB = ProfessionLevelerScanDB or {}
 
   local function bridge(name)
     local newName = "ProfessionLevelerScan_" .. name
-    local oldName = "WowAhPlannerScan_" .. name
+    local oldName = "FrugalScan_" .. name
     if _G[newName] == nil then _G[newName] = _G[oldName] end
     if _G[oldName] == nil then _G[oldName] = _G[newName] end
   end
@@ -26,17 +26,17 @@ end
 BridgeSavedVariables()
 
 local function EnsureDb()
-  if type(WowAhPlannerScanDB) ~= "table" then
-    WowAhPlannerScanDB = {}
+  if type(FrugalScanDB) ~= "table" then
+    FrugalScanDB = {}
   end
-  if type(WowAhPlannerScanDB.settings) ~= "table" then
-    WowAhPlannerScanDB.settings = {}
+  if type(FrugalScanDB.settings) ~= "table" then
+    FrugalScanDB.settings = {}
   end
-  if type(WowAhPlannerScanDB.debugLog) ~= "table" then
-    WowAhPlannerScanDB.debugLog = {}
+  if type(FrugalScanDB.debugLog) ~= "table" then
+    FrugalScanDB.debugLog = {}
   end
 
-  local s = WowAhPlannerScanDB.settings
+  local s = FrugalScanDB.settings
   if type(s.maxSkillDelta) ~= "number" then s.maxSkillDelta = 100 end
   if type(s.expansionCapSkill) ~= "number" then s.expansionCapSkill = 350 end
   if type(s.maxPagesPerItem) ~= "number" then s.maxPagesPerItem = 10 end
@@ -55,10 +55,10 @@ local TryRegisterOptions = nil
 
 local function AppendLog(line)
   EnsureDb()
-  local log = WowAhPlannerScanDB.debugLog
+  local log = FrugalScanDB.debugLog
   if type(log) ~= "table" then
-    WowAhPlannerScanDB.debugLog = {}
-    log = WowAhPlannerScanDB.debugLog
+    FrugalScanDB.debugLog = {}
+    log = FrugalScanDB.debugLog
   end
 
   local ts = date("%H:%M:%S", time())
@@ -75,12 +75,12 @@ end
 
 local function Print(msg)
   AppendLog(tostring(msg))
-  DEFAULT_CHAT_FRAME:AddMessage("|cff7dd3fcWowAhPlannerScan|r: " .. tostring(msg))
+  DEFAULT_CHAT_FRAME:AddMessage("|cff7dd3fcFrugalScan|r: " .. tostring(msg))
 end
 
 local function DebugPrint(msg)
   EnsureDb()
-  if WowAhPlannerScanDB and WowAhPlannerScanDB.settings and WowAhPlannerScanDB.settings.verboseDebug then
+  if FrugalScanDB and FrugalScanDB.settings and FrugalScanDB.settings.verboseDebug then
     Print("[debug] " .. tostring(msg))
   end
 end
@@ -159,7 +159,7 @@ local state = {
 }
 
 local function GetSetting(name, defaultValue)
-  local settings = WowAhPlannerScanDB and WowAhPlannerScanDB.settings or nil
+  local settings = FrugalScanDB and FrugalScanDB.settings or nil
   if not settings then return defaultValue end
   local value = settings[name]
   if value == nil then return defaultValue end
@@ -186,7 +186,7 @@ local function OpenOptionsUi()
   DebugPrint("OpenOptionsUi()")
 
   if Settings and Settings.OpenToCategory then
-    local id = WowAhPlannerScanDB and WowAhPlannerScanDB._settingsCategoryId or nil
+    local id = FrugalScanDB and FrugalScanDB._settingsCategoryId or nil
 
     local function TryOpen()
       pcall(Settings.OpenToCategory, "AddOns")
@@ -198,7 +198,7 @@ local function OpenOptionsUi()
         pcall(Settings.OpenToCategory, id)
         return
       end
-      pcall(Settings.OpenToCategory, "WowAhPlannerScan")
+      pcall(Settings.OpenToCategory, "FrugalScan")
     end
 
     TryOpen()
@@ -215,8 +215,8 @@ local function OpenOptionsUi()
     if InterfaceOptionsFrame and InterfaceOptionsFrame.Show then
       InterfaceOptionsFrame:Show()
     end
-    pcall(InterfaceOptionsFrame_OpenToCategory, frame or "WowAhPlannerScan")
-    pcall(InterfaceOptionsFrame_OpenToCategory, frame or "WowAhPlannerScan")
+    pcall(InterfaceOptionsFrame_OpenToCategory, frame or "FrugalScan")
+    pcall(InterfaceOptionsFrame_OpenToCategory, frame or "FrugalScan")
     return
   end
 
@@ -342,7 +342,7 @@ local function TrySendBrowseQueryViaUi(searchText, debugItemName)
 
   -- Reduce false positives from partial name matches (e.g. "Thick Leather Ammo Pouch").
   local exactOk = SetBrowseExactMatch(true)
-  if (not exactOk) and WowAhPlannerScanDB and WowAhPlannerScanDB.settings and WowAhPlannerScanDB.settings.verboseDebug then
+  if (not exactOk) and FrugalScanDB and FrugalScanDB.settings and FrugalScanDB.settings.verboseDebug then
     DebugPrint("Exact-match checkbox not found; UI search may return partial name matches.")
   end
 
@@ -427,7 +427,7 @@ local function DetectRegion()
     end
   end
 
-  local configured = WowAhPlannerScan_TargetRegion
+  local configured = FrugalScan_TargetRegion
   if configured and tostring(configured) ~= "" then
     return tostring(configured)
   end
@@ -484,9 +484,9 @@ local function FinishSnapshot()
     faction = UnitFactionGroup("player"),
     region = region,
     realmSlug = realmSlug,
-    gameVersion = WowAhPlannerScan_TargetGameVersion,
-    targetProfessionId = WowAhPlannerScan_TargetProfessionId,
-    targetProfessionName = WowAhPlannerScan_TargetProfessionName,
+    gameVersion = FrugalScan_TargetGameVersion,
+    targetProfessionId = FrugalScan_TargetProfessionId,
+    targetProfessionName = FrugalScan_TargetProfessionName,
     generatedAtEpochUtc = time(),
     priceRank = rank,
     prices = {},
@@ -508,23 +508,23 @@ local function FinishSnapshot()
 
   table.sort(snapshot.prices, function(a, b) return a.itemId < b.itemId end)
 
-  WowAhPlannerScanDB.lastSnapshot = snapshot
-  WowAhPlannerScanDB.lastSnapshotJson = BuildExportJsonFromSnapshot(snapshot)
-  WowAhPlannerScanDB.lastGeneratedAtEpochUtc = snapshot.generatedAtEpochUtc
+  FrugalScanDB.lastSnapshot = snapshot
+  FrugalScanDB.lastSnapshotJson = BuildExportJsonFromSnapshot(snapshot)
+  FrugalScanDB.lastGeneratedAtEpochUtc = snapshot.generatedAtEpochUtc
 
   state.running = false
   state.currentItemId = nil
   state.queue = {}
   state.awaiting = false
 
-  Print("Scan complete. Items priced: " .. tostring(#(snapshot.prices or {})) .. ". Use /wahpscan export to copy JSON (or /reload to save SavedVariables for the web app).")
+  Print("Scan complete. Items priced: " .. tostring(#(snapshot.prices or {})) .. ".")
 end
 
 local function BuildExportJson()
-  local snap = WowAhPlannerScanDB.lastSnapshot
+  local snap = FrugalScanDB.lastSnapshot
   if not snap then return nil end
   local json = BuildExportJsonFromSnapshot(snap)
-  WowAhPlannerScanDB.lastSnapshotJson = json
+  FrugalScanDB.lastSnapshotJson = json
   return json
 end
 
@@ -563,8 +563,8 @@ local function BuildWantedItemIdSet()
   local wanted = {}
   local count = 0
 
-  if type(WowAhPlannerScan_TargetItemIds) == "table" then
-    for _, itemId in ipairs(WowAhPlannerScan_TargetItemIds) do
+  if type(FrugalScan_TargetItemIds) == "table" then
+    for _, itemId in ipairs(FrugalScan_TargetItemIds) do
       local n = tonumber(itemId)
       if n and n > 0 and not wanted[n] then
         wanted[n] = true
@@ -573,8 +573,8 @@ local function BuildWantedItemIdSet()
     end
   end
 
-  if type(WowAhPlannerScan_OwnedItemIds) == "table" then
-    for _, itemId in ipairs(WowAhPlannerScan_OwnedItemIds) do
+  if type(FrugalScan_OwnedItemIds) == "table" then
+    for _, itemId in ipairs(FrugalScan_OwnedItemIds) do
       local n = tonumber(itemId)
       if n and n > 0 and not wanted[n] then
         wanted[n] = true
@@ -583,8 +583,8 @@ local function BuildWantedItemIdSet()
     end
   end
 
-  if count == 0 and type(WowAhPlannerScan_RecipeTargets) == "table" then
-    for _, r in ipairs(WowAhPlannerScan_RecipeTargets) do
+  if count == 0 and type(FrugalScan_RecipeTargets) == "table" then
+    for _, r in ipairs(FrugalScan_RecipeTargets) do
       if type(r) == "table" and type(r.reagents) == "table" then
         for _, itemId in ipairs(r.reagents) do
           local n = tonumber(itemId)
@@ -597,8 +597,8 @@ local function BuildWantedItemIdSet()
     end
   end
 
-  if type(WowAhPlannerScan_VendorItemIds) == "table" then
-    for _, itemId in ipairs(WowAhPlannerScan_VendorItemIds) do
+  if type(FrugalScan_VendorItemIds) == "table" then
+    for _, itemId in ipairs(FrugalScan_VendorItemIds) do
       local n = tonumber(itemId)
       if n and n > 0 and not wanted[n] then
         wanted[n] = true
@@ -670,7 +670,7 @@ local function BuildOwnedCountsByCharacterFromBagBrother(wantedSet)
   end
 
   if type(bb) ~= "table" then
-    return nil, nil, "BagBrother/Bagnon data not found. Expected global BrotherBags (preferred) or BagBrother/BagnonDB. If you have Bagnon/BagBrother installed, enable BagBrother and /reload. Use /wahpscan owneddebug for diagnostics."
+    return nil, nil, "BagBrother/Bagnon data not found. Expected global BrotherBags (preferred) or BagBrother/BagnonDB. If you have Bagnon/BagBrother installed, enable BagBrother and /reload. Use /frugalscan owneddebug for diagnostics."
   end
 
   local realmName = GetRealmName()
@@ -697,7 +697,7 @@ local function BuildOwnedCountsByCharacterFromBagBrother(wantedSet)
   end
 
   if #charRoots == 0 then
-    return nil, nil, "Owned export: could not find realm-specific section in " .. tostring(source) .. ". Refusing to scan entire DB to avoid counting guild bank/other realms. Use /wahpscan owneddebug for diagnostics."
+    return nil, nil, "Owned export: could not find realm-specific section in " .. tostring(source) .. ". Refusing to scan entire DB to avoid counting guild bank/other realms. Use /frugalscan owneddebug for diagnostics."
   else
     DebugPrint("Owned export: using " .. tostring(source) .. " realm=\"" .. tostring(realmName) .. "\" characters=" .. tostring(#charRoots))
   end
@@ -828,7 +828,7 @@ local function ExportOwned()
 
   local wantedSet, wantedCount = BuildWantedItemIdSet()
   if wantedCount == 0 then
-    Print("No target itemIds loaded. Install targets from the web app first.")
+    Print("No target itemIds loaded. Open /frugal, choose a profession, and Build Targets.")
     return
   end
 
@@ -856,7 +856,7 @@ local function ExportOwned()
     realmName = realmName,
     realmSlug = realmSlug,
     region = region,
-    gameVersion = WowAhPlannerScan_TargetGameVersion,
+    gameVersion = FrugalScan_TargetGameVersion,
     itemCount = #(items or {}),
     items = items,
   }
@@ -879,11 +879,14 @@ local function ExportOwned()
   end
 
   local json = BuildOwnedExportJsonFromCounts(snapshot, items, characters)
-  WowAhPlannerScanDB.lastOwnedSnapshot = snapshot
-  WowAhPlannerScanDB.lastOwnedJson = json
+  FrugalScanDB.lastOwnedSnapshot = snapshot
+  if type(FrugalForgeDB) == "table" then
+    FrugalForgeDB.lastOwnedSnapshot = snapshot
+  end
+  FrugalScanDB.lastOwnedJson = json
 
-  ShowExportFrame(json, "WowAhPlanner Owned Items")
-  Print("Owned export ready (" .. tostring(snapshot.itemCount or 0) .. " items). /reload to save SavedVariables for the web app.")
+  ShowExportFrame(json, "FrugalForge Owned Items")
+  Print("Owned export ready (" .. tostring(snapshot.itemCount or 0) .. " items).")
 end
 
 ShowExportFrame = function(textOverride, titleOverride)
@@ -891,17 +894,17 @@ ShowExportFrame = function(textOverride, titleOverride)
   local titleText = titleOverride
   if not text then
     text = BuildExportJson()
-    titleText = titleText or "WowAhPlannerScan Export"
+    titleText = titleText or "FrugalScan Export"
     if not text then
-      Print("No snapshot found yet. Run /wahpscan start first.")
+      Print("No snapshot found yet. Run /frugalscan start (or /frugal scan) first.")
       return
     end
   else
-    titleText = titleText or "WowAhPlannerScan Log"
+    titleText = titleText or "FrugalScan Log"
   end
 
   if not exportFrame then
-    exportFrame = CreateFrame("Frame", "WowAhPlannerScanExportFrame", UIParent, "BackdropTemplate")
+    exportFrame = CreateFrame("Frame", "FrugalScanExportFrame", UIParent, "BackdropTemplate")
     exportFrame:SetSize(700, 450)
     exportFrame:SetPoint("CENTER")
     exportFrame:SetMovable(true)
@@ -951,10 +954,19 @@ end
 local function QueueItems()
   state.queue = {}
 
-  local recipeTargets = WowAhPlannerScan_RecipeTargets
-  local professionId = WowAhPlannerScan_TargetProfessionId
-  local professionName = WowAhPlannerScan_TargetProfessionName
+  local recipeTargets = FrugalScan_RecipeTargets
+  local professionId = FrugalScan_TargetProfessionId
+  local professionName = FrugalScan_TargetProfessionName
+  if type(_G.FrugalForgeDB) == "table" and type(_G.FrugalForgeDB.targets) == "table" then
+    local t = _G.FrugalForgeDB.targets
+    if type(t.targets) == "table" and #t.targets > 0 then
+      recipeTargets = t.targets
+    end
+    if t.professionId then professionId = t.professionId end
+    if t.professionName then professionName = t.professionName end
+  end
   local maxSkillDelta = tonumber(GetSetting("maxSkillDelta", 100)) or 100
+  DebugPrint("targets profId=" .. tostring(professionId) .. ", name=" .. tostring(professionName) .. ", recipes=" .. tostring(type(recipeTargets) == "table" and #recipeTargets or 0))
   if maxSkillDelta < 0 then maxSkillDelta = 0 end
 
   local wantById = type(professionId) == "number"
@@ -1020,7 +1032,7 @@ local function QueueItems()
         return
       end
 
-      Print("No reagent itemIds found in targets. Falling back to WowAhPlannerScan_TargetItemIds if present.")
+      Print("No reagent itemIds found in targets. Falling back to legacy target list if present.")
     else
       local cap = tonumber(GetSetting("expansionCapSkill", 350)) or 350
       if cap < skillLevel then cap = skillLevel end
@@ -1062,7 +1074,7 @@ local function QueueItems()
     end
   end
 
-  local targets = WowAhPlannerScan_TargetItemIds or {}
+  local targets = _G.FrugalScan_TargetItemIds or _G.ProfessionLevelerScan_TargetItemIds or {}
   if type(targets) ~= "table" then targets = {} end
 
   for _, itemId in ipairs(targets) do
@@ -1072,7 +1084,7 @@ local function QueueItems()
   end
 
   if #state.queue == 0 then
-    Print("Queued 0 items. Targets not loaded or empty. Ensure WowAhPlannerScan_Targets.lua is installed and /reload after updating it.")
+    Print("Queued 0 items. Targets not loaded or empty. Use /frugal to build targets, then scan again.")
   else
     Print("Queued " .. tostring(#state.queue) .. " items.")
   end
@@ -1259,7 +1271,7 @@ local function ProcessCurrentPage()
       InsertSortedLimited(entry.bestUnits, unit, rank)
       entry.totalQuantity = entry.totalQuantity + count
       matched = matched + 1
-      elseif WowAhPlannerScanDB and WowAhPlannerScanDB.settings and WowAhPlannerScanDB.settings.verboseDebug and (isExactIdMatch or (not id and isExactNameMatch)) then
+      elseif FrugalScanDB and FrugalScanDB.settings and FrugalScanDB.settings.verboseDebug and (isExactIdMatch or (not id and isExactNameMatch)) then
         DebugPrint("No buyout for match: name=\"" .. tostring(auctionName) .. "\", count=" .. tostring(count) ..
           ", minBid=" .. tostring(minBid) .. ", buyout=" .. tostring(buyoutPrice) .. ", linkId=" .. tostring(id))
       end
@@ -1275,7 +1287,7 @@ local function ProcessCurrentPage()
       ", buyoutMissing=" .. tostring(buyoutMissing) ..
       ", queryName=\"" .. tostring(state.currentQueryName) .. "\")")
 
-    if WowAhPlannerScanDB and WowAhPlannerScanDB.settings and WowAhPlannerScanDB.settings.verboseDebug and shown > 0 then
+    if FrugalScanDB and FrugalScanDB.settings and FrugalScanDB.settings.verboseDebug and shown > 0 then
       local n, c, mb, bo, fields = ExtractAuctionRow("list", 1)
       local l = GetAuctionItemLink("list", 1)
       local pid = ParseItemIdFromLink(l)
@@ -1382,7 +1394,7 @@ local function StartScan(queueOverride)
   end
 
   if #state.queue == 0 then
-    Print("No targets loaded. Use the web app Targets page to download WowAhPlannerScan_Targets.lua, install it, then /reload.")
+    Print("No targets loaded. Use /frugal to build targets, then scan again.")
     return
   end
 
@@ -1400,8 +1412,8 @@ local function StopScan()
   Print("Stopped.")
 end
 
-SLASH_WOWAHPLANNERSCAN1 = "/wahpscan"
-SlashCmdList["WOWAHPLANNERSCAN"] = function(msg)
+SLASH_FRUGALSCAN1 = "/frugalscan"
+SlashCmdList["FRUGALSCAN"] = function(msg)
   EnsureDb()
   local cmd, rest = FirstWord(msg)
   cmd = string.lower(cmd or "")
@@ -1414,7 +1426,7 @@ SlashCmdList["WOWAHPLANNERSCAN"] = function(msg)
 
   if cmd == "item" or cmd == "scanitem" then
     if rest == "" then
-      Print("Usage: /wahpscan item <itemId|itemLink>")
+      Print("Usage: /frugalscan item <itemId|itemLink>")
       return
     end
 
@@ -1454,19 +1466,19 @@ SlashCmdList["WOWAHPLANNERSCAN"] = function(msg)
   end
 
   if cmd == "panel" then
-    if WowAhPlannerScanPanel and WowAhPlannerScanPanel:IsShown() then
-      WowAhPlannerScanPanel:Hide()
+    if FrugalScanPanel and FrugalScanPanel:IsShown() then
+      FrugalScanPanel:Hide()
       Print("Panel hidden.")
     else
-      if WowAhPlannerScanPanel then
-        WowAhPlannerScanPanel:ClearAllPoints()
+      if FrugalScanPanel then
+        FrugalScanPanel:ClearAllPoints()
         local af = GetAuctionFrame()
         if af then
-          WowAhPlannerScanPanel:SetPoint("TOPLEFT", af, "TOPRIGHT", 12, -80)
+          FrugalScanPanel:SetPoint("TOPLEFT", af, "TOPRIGHT", 12, -80)
         else
-          WowAhPlannerScanPanel:SetPoint("CENTER")
+          FrugalScanPanel:SetPoint("CENTER")
         end
-        WowAhPlannerScanPanel:Show()
+        FrugalScanPanel:Show()
       end
       Print("Panel shown.")
     end
@@ -1474,30 +1486,30 @@ SlashCmdList["WOWAHPLANNERSCAN"] = function(msg)
   end
 
   if cmd == "log" then
-    local log = WowAhPlannerScanDB.debugLog or {}
+    local log = FrugalScanDB.debugLog or {}
     local text = table.concat(log, "\n")
     if text == "" then
       Print("Log is empty.")
       return
     end
-    ShowExportFrame(text, "WowAhPlannerScan Log")
+    ShowExportFrame(text, "FrugalScan Log")
     return
   end
 
   if cmd == "clearlog" then
-    WowAhPlannerScanDB.debugLog = {}
+    FrugalScanDB.debugLog = {}
     Print("Log cleared.")
     return
   end
 
   if cmd == "verbose" or cmd == "v" then
-    WowAhPlannerScanDB.settings.verboseDebug = not (WowAhPlannerScanDB.settings.verboseDebug == true)
-    Print("Verbose debug = " .. tostring(WowAhPlannerScanDB.settings.verboseDebug))
+    FrugalScanDB.settings.verboseDebug = not (FrugalScanDB.settings.verboseDebug == true)
+    Print("Verbose debug = " .. tostring(FrugalScanDB.settings.verboseDebug))
     return
   end
 
   if cmd == "debug" then
-    Print("Target id=" .. tostring(WowAhPlannerScan_TargetProfessionId) .. ", name=" .. tostring(WowAhPlannerScan_TargetProfessionName))
+    Print("Target id=" .. tostring(FrugalScan_TargetProfessionId) .. ", name=" .. tostring(FrugalScan_TargetProfessionName))
     Print("Settings: maxSkillDelta=" .. tostring(GetSetting("maxSkillDelta", 100)) ..
       ", expansionCapSkill=" .. tostring(GetSetting("expansionCapSkill", 350)) ..
       ", maxPagesPerItem=" .. tostring(GetSetting("maxPagesPerItem", 10)) ..
@@ -1560,13 +1572,13 @@ SlashCmdList["WOWAHPLANNERSCAN"] = function(msg)
     return
   end
 
-  Print("Commands: /wahpscan start | item <id|link> | stop | status | export | owned | owneddebug | options | panel | log | clearlog | debug | verbose")
+  Print("Commands: /frugalscan start | item <id|link> | stop | status | export | owned | owneddebug | options | panel | log | clearlog | debug | verbose")
 end
 
 -- Auction House panel UI
 local backdropTemplate = BackdropTemplateMixin and "BackdropTemplate" or nil
-local panel = CreateFrame("Frame", "WowAhPlannerScanPanel", UIParent, backdropTemplate)
-panel:SetSize(240, 198)
+local panel = CreateFrame("Frame", "FrugalScanPanel", UIParent, backdropTemplate)
+panel:SetSize(280, 230)
 panel:SetFrameStrata("DIALOG")
 panel:SetFrameLevel(1000)
 panel:SetClampedToScreen(true)
@@ -1589,14 +1601,14 @@ panel:SetScript("OnDragStop", panel.StopMovingOrSizing)
 
 local panelTitle = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
 panelTitle:SetPoint("TOPLEFT", 12, -12)
-panelTitle:SetText("WowAhPlannerScan")
+panelTitle:SetText("FrugalScan")
 
 local panelClose = CreateFrame("Button", nil, panel, "UIPanelCloseButton")
 panelClose:SetPoint("TOPRIGHT", -4, -4)
 
 local statusText = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 statusText:SetPoint("TOPLEFT", 12, -36)
-statusText:SetWidth(216)
+statusText:SetWidth(256)
 statusText:SetJustifyH("LEFT")
 statusText:SetText("Ready.")
 
@@ -1629,8 +1641,8 @@ logBtn:SetPoint("LEFT", optionsBtn, "RIGHT", 8, 0)
 logBtn:SetSize(102, 22)
 logBtn:SetText("Log")
 logBtn:SetScript("OnClick", function()
-  local log = WowAhPlannerScanDB and WowAhPlannerScanDB.debugLog or {}
-  ShowExportFrame(table.concat(log or {}, "\n"), "WowAhPlannerScan Log")
+  local log = FrugalScanDB and FrugalScanDB.debugLog or {}
+  ShowExportFrame(table.concat(log or {}, "\n"), "FrugalScan Log")
 end)
 
 local ownedBtn = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
@@ -1650,8 +1662,8 @@ local function UpdatePanelStatus()
     end
     statusText:SetText("Scanning...\nCurrent itemId: " .. tostring(current) .. "\nRemaining: " .. tostring(remaining) .. suffix)
   else
-    local last = WowAhPlannerScanDB.lastSnapshot and WowAhPlannerScanDB.lastSnapshot.snapshotTimestampUtc or nil
-    local lastOwned = WowAhPlannerScanDB.lastOwnedSnapshot and WowAhPlannerScanDB.lastOwnedSnapshot.snapshotTimestampUtc or nil
+    local last = FrugalScanDB.lastSnapshot and FrugalScanDB.lastSnapshot.snapshotTimestampUtc or nil
+    local lastOwned = FrugalScanDB.lastOwnedSnapshot and FrugalScanDB.lastOwnedSnapshot.snapshotTimestampUtc or nil
     if last then
       local ownedLine = lastOwned and ("\nOwned: " .. tostring(lastOwned)) or ""
       statusText:SetText("Ready.\nLast snapshot: " .. tostring(last) .. ownedLine)
@@ -1706,7 +1718,7 @@ ahEventFrame:RegisterEvent("PLAYER_LOGIN")
 ahEventFrame:SetScript("OnEvent", function(_, event)
   EnsureDb()
   if event == "AUCTION_HOUSE_SHOW" then
-    if WowAhPlannerScanDB.settings.showPanelOnAuctionHouse then
+    if FrugalScanDB.settings.showPanelOnAuctionHouse then
       C_Timer.After(0.1, ShowPanelNearAuctionHouse)
     end
   elseif event == "AUCTION_HOUSE_CLOSED" then
@@ -1714,7 +1726,7 @@ ahEventFrame:SetScript("OnEvent", function(_, event)
   elseif event == "PLAYER_LOGIN" then
     TryRegisterOptions()
     -- Fallback: if the AH is already open when the player logs in/reloads.
-    if WowAhPlannerScanDB.settings.showPanelOnAuctionHouse and IsAtAuctionHouse() then
+    if FrugalScanDB.settings.showPanelOnAuctionHouse and IsAtAuctionHouse() then
       C_Timer.After(0.1, ShowPanelNearAuctionHouse)
     end
   end
@@ -1723,7 +1735,7 @@ end)
 -- Options UI (legacy Interface Options)
 local optionsParent = InterfaceOptionsFramePanelContainer or UIParent
 local optionsFrame = CreateFrame("Frame", OPTIONS_FRAME_NAME, optionsParent)
-optionsFrame.name = "WowAhPlannerScan"
+optionsFrame.name = "FrugalScan"
 
 local optionsLegacyRegistered = false
 local optionsSettingsRegistered = false
@@ -1734,13 +1746,13 @@ TryRegisterOptions = function()
     DebugPrint("Options registered via InterfaceOptions_AddCategory")
   end
   if (not optionsSettingsRegistered) and Settings and Settings.RegisterCanvasLayoutCategory and Settings.RegisterAddOnCategory then
-    local category = Settings.RegisterCanvasLayoutCategory(optionsFrame, "WowAhPlannerScan")
+    local category = Settings.RegisterCanvasLayoutCategory(optionsFrame, "FrugalScan")
     Settings.RegisterAddOnCategory(category)
     state.settingsCategory = category
     if category and category.GetID then
-      WowAhPlannerScanDB._settingsCategoryId = category:GetID()
+      FrugalScanDB._settingsCategoryId = category:GetID()
     elseif category and category.ID then
-      WowAhPlannerScanDB._settingsCategoryId = category.ID
+      FrugalScanDB._settingsCategoryId = category.ID
     end
     optionsSettingsRegistered = true
     DebugPrint("Options registered via Settings.RegisterAddOnCategory")
@@ -1760,29 +1772,29 @@ optionsFrame:SetScript("OnShow", function(self)
 
   local title = self:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
   title:SetPoint("TOPLEFT", 16, -16)
-  title:SetText("WowAhPlannerScan")
+  title:SetText("FrugalScan")
 
   local subtitle = self:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
   subtitle:SetPoint("TOPLEFT", 16, -40)
-  subtitle:SetText("Configure the scan window used when WowAhPlannerScan_RecipeTargets is loaded.")
+  subtitle:SetText("Configure the scan window used when FrugalScan_RecipeTargets is loaded.")
 
-  local showPanel = CreateFrame("CheckButton", "WowAhPlannerScanShowPanelCheckbox", self, "UICheckButtonTemplate")
+  local showPanel = CreateFrame("CheckButton", "FrugalScanShowPanelCheckbox", self, "UICheckButtonTemplate")
   showPanel:SetPoint("TOPLEFT", 16, -60)
   showPanel.text:SetText("Show scan panel when Auction House opens")
-  showPanel:SetChecked(WowAhPlannerScanDB.settings.showPanelOnAuctionHouse)
+  showPanel:SetChecked(FrugalScanDB.settings.showPanelOnAuctionHouse)
   showPanel:SetScript("OnClick", function(btn)
-    WowAhPlannerScanDB.settings.showPanelOnAuctionHouse = btn:GetChecked() and true or false
+    FrugalScanDB.settings.showPanelOnAuctionHouse = btn:GetChecked() and true or false
   end)
 
-  local verbose = CreateFrame("CheckButton", "WowAhPlannerScanVerboseCheckbox", self, "UICheckButtonTemplate")
+  local verbose = CreateFrame("CheckButton", "FrugalScanVerboseCheckbox", self, "UICheckButtonTemplate")
   verbose:SetPoint("TOPLEFT", 16, -82)
   verbose.text:SetText("Verbose debug output")
-  verbose:SetChecked(WowAhPlannerScanDB.settings.verboseDebug)
+  verbose:SetChecked(FrugalScanDB.settings.verboseDebug)
   verbose:SetScript("OnClick", function(btn)
-    WowAhPlannerScanDB.settings.verboseDebug = btn:GetChecked() and true or false
+    FrugalScanDB.settings.verboseDebug = btn:GetChecked() and true or false
   end)
 
-  local rankSlider = CreateFrame("Slider", "WowAhPlannerScanPriceRankSlider", self, "OptionsSliderTemplate")
+  local rankSlider = CreateFrame("Slider", "FrugalScanPriceRankSlider", self, "OptionsSliderTemplate")
   rankSlider:SetPoint("TOPLEFT", 16, -118)
   rankSlider:SetMinMaxValues(1, 5)
   rankSlider:SetValueStep(1)
@@ -1798,11 +1810,11 @@ optionsFrame:SetScript("OnShow", function(self)
   rankSlider:SetScript("OnValueChanged", function(_, value)
     value = math.floor((value or 1) + 0.5)
     if value < 1 then value = 1 end
-    WowAhPlannerScanDB.settings.priceRank = value
+    FrugalScanDB.settings.priceRank = value
     rankValue:SetText(tostring(value))
   end)
 
-  local slider = CreateFrame("Slider", "WowAhPlannerScanMaxSkillDeltaSlider", self, "OptionsSliderTemplate")
+  local slider = CreateFrame("Slider", "FrugalScanMaxSkillDeltaSlider", self, "OptionsSliderTemplate")
   slider:SetPoint("TOPLEFT", 16, -170)
   slider:SetMinMaxValues(0, 200)
   slider:SetValueStep(5)
@@ -1817,7 +1829,7 @@ optionsFrame:SetScript("OnShow", function(self)
 
   slider:SetScript("OnValueChanged", function(_, value)
     value = math.floor((value or 0) + 0.5)
-    WowAhPlannerScanDB.settings.maxSkillDelta = value
+    FrugalScanDB.settings.maxSkillDelta = value
     sliderValue:SetText(tostring(value))
   end)
 
@@ -1825,7 +1837,7 @@ optionsFrame:SetScript("OnShow", function(self)
   hint:SetPoint("TOPLEFT", 16, -220)
   hint:SetText("Default is 100. Upper bound is clamped to Expansion cap.")
 
-  local capSlider = CreateFrame("Slider", "WowAhPlannerScanExpansionCapSlider", self, "OptionsSliderTemplate")
+  local capSlider = CreateFrame("Slider", "FrugalScanExpansionCapSlider", self, "OptionsSliderTemplate")
   capSlider:SetPoint("TOPLEFT", 16, -260)
   capSlider:SetMinMaxValues(75, 450)
   capSlider:SetValueStep(25)
@@ -1840,11 +1852,11 @@ optionsFrame:SetScript("OnShow", function(self)
 
   capSlider:SetScript("OnValueChanged", function(_, value)
     value = math.floor((value or 0) + 0.5)
-    WowAhPlannerScanDB.settings.expansionCapSkill = value
+    FrugalScanDB.settings.expansionCapSkill = value
     capValue:SetText(tostring(value))
   end)
 
-  local pagesSlider = CreateFrame("Slider", "WowAhPlannerScanMaxPagesSlider", self, "OptionsSliderTemplate")
+  local pagesSlider = CreateFrame("Slider", "FrugalScanMaxPagesSlider", self, "OptionsSliderTemplate")
   pagesSlider:SetPoint("TOPLEFT", 16, -350)
   pagesSlider:SetMinMaxValues(0, 50)
   pagesSlider:SetValueStep(1)
@@ -1859,11 +1871,11 @@ optionsFrame:SetScript("OnShow", function(self)
 
   pagesSlider:SetScript("OnValueChanged", function(_, value)
     value = math.floor((value or 0) + 0.5)
-    WowAhPlannerScanDB.settings.maxPagesPerItem = value
+    FrugalScanDB.settings.maxPagesPerItem = value
     pagesValue:SetText(tostring(value))
   end)
 
-  local intervalSlider = CreateFrame("Slider", "WowAhPlannerScanQueryIntervalSlider", self, "OptionsSliderTemplate")
+  local intervalSlider = CreateFrame("Slider", "FrugalScanQueryIntervalSlider", self, "OptionsSliderTemplate")
   intervalSlider:SetPoint("TOPLEFT", 16, -440)
   intervalSlider:SetMinMaxValues(1, 5)
   intervalSlider:SetValueStep(1)
@@ -1878,11 +1890,11 @@ optionsFrame:SetScript("OnShow", function(self)
 
   intervalSlider:SetScript("OnValueChanged", function(_, value)
     value = math.floor((value or 0) + 0.5)
-    WowAhPlannerScanDB.settings.minQueryIntervalSeconds = value
+    FrugalScanDB.settings.minQueryIntervalSeconds = value
     intervalValue:SetText(tostring(value) .. "s")
   end)
 
-  local retriesSlider = CreateFrame("Slider", "WowAhPlannerScanTimeoutRetriesSlider", self, "OptionsSliderTemplate")
+  local retriesSlider = CreateFrame("Slider", "FrugalScanTimeoutRetriesSlider", self, "OptionsSliderTemplate")
   retriesSlider:SetPoint("TOPLEFT", 16, -530)
   retriesSlider:SetMinMaxValues(0, 10)
   retriesSlider:SetValueStep(1)
@@ -1897,11 +1909,11 @@ optionsFrame:SetScript("OnShow", function(self)
 
   retriesSlider:SetScript("OnValueChanged", function(_, value)
     value = math.floor((value or 0) + 0.5)
-    WowAhPlannerScanDB.settings.maxTimeoutRetriesPerPage = value
+    FrugalScanDB.settings.maxTimeoutRetriesPerPage = value
     retriesValue:SetText(tostring(value))
   end)
 
-  local timeoutSlider = CreateFrame("Slider", "WowAhPlannerScanQueryTimeoutSlider", self, "OptionsSliderTemplate")
+  local timeoutSlider = CreateFrame("Slider", "FrugalScanQueryTimeoutSlider", self, "OptionsSliderTemplate")
   timeoutSlider:SetPoint("TOPLEFT", 16, -620)
   timeoutSlider:SetMinMaxValues(5, 30)
   timeoutSlider:SetValueStep(1)
@@ -1916,7 +1928,7 @@ optionsFrame:SetScript("OnShow", function(self)
 
   timeoutSlider:SetScript("OnValueChanged", function(_, value)
     value = math.floor((value or 0) + 0.5)
-    WowAhPlannerScanDB.settings.queryTimeoutSeconds = value
+    FrugalScanDB.settings.queryTimeoutSeconds = value
     timeoutValue:SetText(tostring(value) .. "s")
   end)
 end)

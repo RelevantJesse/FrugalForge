@@ -12,12 +12,14 @@ local function ensureDb()
     showPanelOnAuctionHouse = true,
     maxSkillDelta = 100,
     selectedProfessionId = nil,
+    debug = false,
+    useCraftIntermediates = true,
   }
   FrugalForgeDB.lastPlan = FrugalForgeDB.lastPlan or nil
 end
 
 local function latestSnapshot()
-  local db = _G.ProfessionLevelerScanDB or _G.WowAhPlannerScanDB
+  local db = _G.FrugalScanDB or _G.ProfessionLevelerScanDB
   if type(db) ~= "table" then return nil end
   local snap = db.lastSnapshot
   if type(snap) ~= "table" then return nil end
@@ -25,7 +27,10 @@ local function latestSnapshot()
 end
 
 local function latestOwned()
-  local db = _G.ProfessionLevelerScanDB or _G.WowAhPlannerScanDB
+  if type(FrugalForgeDB) == "table" and type(FrugalForgeDB.lastOwnedSnapshot) == "table" then
+    return FrugalForgeDB.lastOwnedSnapshot
+  end
+  local db = _G.FrugalScanDB or _G.ProfessionLevelerScanDB
   if type(db) ~= "table" then return nil end
   local owned = db.lastOwnedSnapshot
   if type(owned) ~= "table" then return nil end
@@ -68,6 +73,145 @@ local function colorize(text, color)
   return color .. text .. "|r"
 end
 
+local function getItemName(itemId)
+  local data = FrugalForgeData_Anniversary
+  if data and type(data.items) == "table" then
+    local name = data.items[itemId]
+    if name then return name end
+  end
+  return "item " .. tostring(itemId)
+end
+
+local function log(msg)
+  if not msg then return end
+  DEFAULT_CHAT_FRAME:AddMessage("|cff7dd3fcFrugalForge|r: " .. tostring(msg))
+  FrugalForgeDB.debugLog = FrugalForgeDB.debugLog or {}
+  table.insert(FrugalForgeDB.debugLog, tostring(msg))
+  if #FrugalForgeDB.debugLog > 200 then
+    table.remove(FrugalForgeDB.debugLog, 1)
+  end
+end
+
+local ui = {}
+local buildTargetsForProfession
+local function buildTargetsFromUi()
+  local selected = FrugalForgeDB.settings.selectedProfessionId
+  if not selected and ui.profDrop then
+    local dropdownText = UIDropDownMenu_GetText(ui.profDrop)
+    if dropdownText and dropdownText ~= "" and dropdownText ~= "Select..." then
+      local byName = getProfessionByName(dropdownText)
+      if byName then
+        selected = byName.professionId
+        FrugalForgeDB.settings.selectedProfessionId = selected
+      end
+    end
+  end
+  if not selected then
+    local msg = "Select a profession first."
+    FrugalForgeDB.lastBuildError = msg
+    DEFAULT_CHAT_FRAME:AddMessage("|cff7dd3fcFrugalForge|r: " .. msg)
+    showTextFrame(msg, "FrugalForge Build Targets Error")
+    return
+  end
+  local delta = tonumber(ui.deltaBox and ui.deltaBox:GetText() or "") or (FrugalForgeDB.settings.maxSkillDelta or 100)
+  FrugalForgeDB.settings.maxSkillDelta = delta
+  FrugalForgeDB.lastBuildError = nil
+  FrugalForgeDB.lastBuildMessage = "Build Targets clicked for id=" .. tostring(selected)
+  log(FrugalForgeDB.lastBuildMessage)
+  local function onErr(err)
+    local stack = nil
+    if type(debugstack) == "function" then
+      stack = debugstack()
+    elseif debug and type(debug.traceback) == "function" then
+      stack = debug.traceback()
+    end
+    return tostring(err) .. (stack and ("\n" .. stack) or "")
+  end
+  local ok, built, err = xpcall(function()
+    return buildTargetsForProfession(selected, delta)
+  end, onErr)
+  if not ok then
+    local msg = "Build targets error: " .. tostring(built)
+    FrugalForgeDB.lastBuildError = msg
+    showTextFrame(msg, "FrugalForge Build Targets Error")
+    DEFAULT_CHAT_FRAME:AddMessage("|cff7dd3fcFrugalForge|r: " .. msg)
+    return
+  end
+  if not built then
+    local msg = tostring(err or "Failed to build targets")
+    FrugalForgeDB.lastBuildError = msg
+    showTextFrame(msg, "FrugalForge Build Targets Error")
+    DEFAULT_CHAT_FRAME:AddMessage("|cff7dd3fcFrugalForge|r: " .. msg)
+    return
+  end
+  FrugalForgeDB.targets = {
+    professionId = built.profession.professionId,
+    professionName = built.profession.name,
+    targets = built.targets,
+    reagentIds = built.reagentIds,
+  }
+  FrugalForgeDB.targetsBuiltAt = ts()
+  local okApply, applyErr = applyTargetsSafe(built)
+  if not okApply then
+    local msg = "Targets built, but failed to apply globals: " .. tostring(applyErr)
+    FrugalForgeDB.lastBuildError = msg
+    showTextFrame(msg, "FrugalForge Build Targets Error")
+    DEFAULT_CHAT_FRAME:AddMessage("|cff7dd3fcFrugalForge|r: " .. msg)
+    return
+  end
+  FrugalForgeDB.lastBuildMessage = "Targets built for " .. tostring(built.profession.name) .. " (id=" .. tostring(built.profession.professionId) .. ")"
+  log(FrugalForgeDB.lastBuildMessage)
+  debugLog("applyTargets: prof=" .. tostring(built.profession.name) .. ", recipes=" .. tostring(#(built.targets or {})) .. ", reagents=" .. tostring(#(built.reagentIds or {})))
+  showTextFrame(FrugalForgeDB.lastBuildMessage, "FrugalForge Build Targets")
+end
+
+local function debugLog(msg)
+  if FrugalForgeDB and FrugalForgeDB.settings and FrugalForgeDB.settings.debug == true then
+    log("DEBUG: " .. tostring(msg))
+  end
+end
+
+local function showTextFrame(text, title)
+  if not ui.debugFrame then
+    local frame = CreateFrame("Frame", "FrugalForgeDebugFrame", UIParent, "BasicFrameTemplateWithInset")
+    frame:SetSize(520, 420)
+    frame:SetPoint("CENTER")
+    frame:SetMovable(true)
+    frame:EnableMouse(true)
+    frame:RegisterForDrag("LeftButton")
+    frame:SetScript("OnDragStart", frame.StartMoving)
+    frame:SetScript("OnDragStop", frame.StopMovingOrSizing)
+
+    frame.title = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    frame.title:SetPoint("TOP", 0, -8)
+    frame.title:SetText("FrugalForge Debug")
+
+    local close = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
+    close:SetPoint("TOPRIGHT", -4, -4)
+
+    local scroll = CreateFrame("ScrollFrame", nil, frame, "UIPanelScrollFrameTemplate")
+    scroll:SetPoint("TOPLEFT", 12, -32)
+    scroll:SetPoint("BOTTOMRIGHT", -32, 12)
+
+    local box = CreateFrame("EditBox", nil, scroll)
+    box:SetMultiLine(true)
+    box:SetFontObject(GameFontHighlightSmall)
+    box:SetWidth(450)
+    box:SetAutoFocus(false)
+    box:SetScript("OnEscapePressed", function() box:ClearFocus() end)
+    scroll:SetScrollChild(box)
+
+    frame.scroll = scroll
+    frame.box = box
+    ui.debugFrame = frame
+  end
+
+  ui.debugFrame.title:SetText(title or "FrugalForge Debug")
+  ui.debugFrame.box:SetText(text or "")
+  ui.debugFrame.box:HighlightText()
+  ui.debugFrame:Show()
+end
+
 local function normalizeProfessionName(name)
   if type(name) ~= "string" then return nil end
   local s = string.lower(name)
@@ -80,24 +224,45 @@ local function normalizeProfessionName(name)
   return s
 end
 
-local function hasProfession(targetName)
+local function getProfessionSkillByName(targetName)
   local targetNorm = normalizeProfessionName(targetName)
-  if not targetNorm then return false end
-  if not GetNumSkillLines or not GetSkillLineInfo then return false end
+  if not targetNorm then return nil, nil end
 
-  local num = GetNumSkillLines()
-  if not num or num <= 0 then return false end
-
-  for i = 1, num do
-    local name, isHeader, _, rank, _, _, maxRank = GetSkillLineInfo(i)
-    if not isHeader then
-      local norm = normalizeProfessionName(name)
-      if norm and norm == targetNorm then
-        return true, rank, maxRank
+  if GetNumSkillLines and GetSkillLineInfo then
+    local num = GetNumSkillLines()
+    if num and num > 0 then
+      for i = 1, num do
+        local name, isHeader, _, rank, _, _, maxRank = GetSkillLineInfo(i)
+        if not isHeader then
+          local norm = normalizeProfessionName(name)
+          if norm and norm == targetNorm then
+            return rank, maxRank
+          end
+        end
       end
     end
   end
 
+  if GetProfessions and GetProfessionInfo then
+    local primary1, primary2, archaeology, fishing, cooking, firstAid = GetProfessions()
+    local profs = { primary1, primary2, archaeology, fishing, cooking, firstAid }
+    for _, idx in ipairs(profs) do
+      if idx then
+        local name, _, sLevel, mLevel = GetProfessionInfo(idx)
+        local nameNorm = normalizeProfessionName(name)
+        if nameNorm and nameNorm == targetNorm then
+          return sLevel, mLevel
+        end
+      end
+    end
+  end
+
+  return nil, nil
+end
+
+local function hasProfession(targetName)
+  local rank, maxRank = getProfessionSkillByName(targetName)
+  if rank then return true, rank, maxRank end
   return false
 end
 
@@ -123,12 +288,12 @@ local function getProfessionByName(name)
 end
 
 local function currentSkillForProfession(professionName)
-  local ok, rank, maxRank = hasProfession(professionName)
-  if ok then return rank, maxRank end
+  local rank, maxRank = getProfessionSkillByName(professionName)
+  if rank then return rank, maxRank end
   return nil, nil
 end
 
-local function buildTargetsForProfession(professionId, maxSkillDelta)
+buildTargetsForProfession = function(professionId, maxSkillDelta)
   local prof = getProfessionById(professionId)
   if not prof then return nil, "Unknown profession" end
 
@@ -141,10 +306,21 @@ local function buildTargetsForProfession(professionId, maxSkillDelta)
   local seen = {}
 
   for _, r in ipairs(prof.recipes or {}) do
-    if r.minSkill and r.minSkill >= currentSkill and r.minSkill <= maxSkill then
+    local minSkill = r.minSkill or 0
+    local grayAt = r.grayAt or 0
+    if minSkill <= maxSkill and grayAt > currentSkill then
+      if type(r.reagents) == "table" and #r.reagents > 0 and type(r.reagents[1]) == "table" then
+        r.reagentsWithQty = r.reagents
+        local ids = {}
+        for _, reg in ipairs(r.reagents) do
+          local itemId = tonumber((type(reg) == "table" and (reg.itemId or reg.id or reg[1])) or reg)
+          if itemId then table.insert(ids, itemId) end
+        end
+        r.reagents = ids
+      end
       table.insert(targets, r)
       for _, reg in ipairs(r.reagents or {}) do
-        local itemId = reg.itemId
+        local itemId = tonumber((type(reg) == "table" and (reg.itemId or reg.id or reg[1])) or reg)
         if itemId and not seen[itemId] then
           seen[itemId] = true
           table.insert(reagentIds, itemId)
@@ -168,6 +344,20 @@ local function buildTargetsForProfession(professionId, maxSkillDelta)
   }, nil
 end
 
+local function buildRecipeByOutput(profession)
+  local map = {}
+  if not profession or type(profession.recipes) ~= "table" then return map end
+  for _, r in ipairs(profession.recipes) do
+    if r and r.createsItemId then
+      local existing = map[r.createsItemId]
+      if not existing or (r.minSkill or 0) < (existing.minSkill or 9999) then
+        map[r.createsItemId] = r
+      end
+    end
+  end
+  return map
+end
+
 local function applyTargets(targets)
   ProfessionLevelerScan_TargetProfessionId = targets.profession.professionId
   ProfessionLevelerScan_TargetProfessionName = targets.profession.name
@@ -175,21 +365,20 @@ local function applyTargets(targets)
   ProfessionLevelerScan_RecipeTargets = targets.targets
   ProfessionLevelerScan_TargetItemIds = targets.reagentIds
 
-  WowAhPlannerScan_TargetProfessionId = ProfessionLevelerScan_TargetProfessionId
-  WowAhPlannerScan_TargetProfessionName = ProfessionLevelerScan_TargetProfessionName
-  WowAhPlannerScan_TargetGameVersion = ProfessionLevelerScan_TargetGameVersion
-  WowAhPlannerScan_RecipeTargets = ProfessionLevelerScan_RecipeTargets
-  WowAhPlannerScan_TargetItemIds = ProfessionLevelerScan_TargetItemIds
-
-  FrugalForgeDB.targets = {
-    professionId = targets.profession.professionId,
-    professionName = targets.profession.name,
-    targets = targets.targets,
-    reagentIds = targets.reagentIds,
-  }
+  FrugalScan_TargetProfessionId = ProfessionLevelerScan_TargetProfessionId
+  FrugalScan_TargetProfessionName = ProfessionLevelerScan_TargetProfessionName
+  FrugalScan_TargetGameVersion = ProfessionLevelerScan_TargetGameVersion
+  FrugalScan_RecipeTargets = ProfessionLevelerScan_RecipeTargets
+  FrugalScan_TargetItemIds = ProfessionLevelerScan_TargetItemIds
 end
 
-local ui = {}
+local function applyTargetsSafe(targets)
+  local ok, err = pcall(applyTargets, targets)
+  if not ok then
+    return false, tostring(err)
+  end
+  return true, nil
+end
 
 local function updateUi()
   if not ui.frame then return end
@@ -208,7 +397,7 @@ local function updateUi()
   if owned and owned.snapshotTimestampUtc then
     ui.ownedValue:SetText(string.format("Owned: %s (%s)", owned.snapshotTimestampUtc, fmtAge(owned.snapshotTimestampUtc)))
   else
-    ui.ownedValue:SetText("Owned: none found (run /wahpscan owned)")
+    ui.ownedValue:SetText("Owned: none found (run /frugal owned)")
   end
 
   local plan = FrugalForgeDB.lastPlan
@@ -216,7 +405,17 @@ local function updateUi()
     ui.planValue:SetText(string.format("Plan: %s (%s)", plan.generatedAt, fmtAge(plan.generatedAtEpochUtc or time())))
     ui.stepsBox:SetText(plan.stepsText or "")
     ui.shoppingBox:SetText(plan.shoppingText or "")
-    ui.summaryBox:SetText(plan.summaryText or "")
+    if plan.summaryText then
+      local lines = {}
+      for line in string.gmatch(plan.summaryText, "[^\r\n]+") do
+        if not string.match(line, "^%s*DEBUG") and not string.match(line, "^%s*Debug:") then
+          table.insert(lines, line)
+        end
+      end
+      ui.summaryBox:SetText(table.concat(lines, "\n"))
+    else
+      ui.summaryBox:SetText("")
+    end
     ui.coverageValue:SetText(colorize(string.format("Coverage: %d%% (%d/%d priced)", plan.coveragePercent or 0, plan.pricedKinds or 0, plan.reagentKinds or 0), "|cffc0ffc0"))
     ui.missingValue:SetText(colorize(string.format("Missing prices: %d", plan.missingPriceItemCount or 0), (plan.missingPriceItemCount or 0) > 0 and "|cffffa0a0" or "|cffc0ffc0"))
     if plan.staleWarning then
@@ -228,11 +427,16 @@ local function updateUi()
     ui.planValue:SetText("Plan: not generated yet")
     ui.stepsBox:SetText("")
     ui.shoppingBox:SetText("")
-    ui.summaryBox:SetText("")
+    if FrugalForgeDB.settings.debug == true then
+      ui.summaryBox:SetText("Debug enabled. Click Generate Plan to populate debug output.")
+    else
+      ui.summaryBox:SetText("")
+    end
     ui.coverageValue:SetText("Coverage: n/a")
     ui.missingValue:SetText("")
     ui.staleValue:SetText("")
   end
+
 end
 
 local function buildMaps()
@@ -242,8 +446,9 @@ local function buildMaps()
   local priceCount = 0
   if snap and type(snap.prices) == "table" then
     for _, p in ipairs(snap.prices) do
-      if p.itemId and p.minUnitBuyoutCopper then
-        prices[p.itemId] = p.minUnitBuyoutCopper
+      local itemId = tonumber(p.itemId)
+      if itemId and p.minUnitBuyoutCopper ~= nil then
+        prices[itemId] = p.minUnitBuyoutCopper
         priceCount = priceCount + 1
       end
     end
@@ -253,8 +458,9 @@ local function buildMaps()
   local ownedCount = 0
   if owned and type(owned.items) == "table" then
     for _, it in ipairs(owned.items) do
-      if it.itemId and it.qty and it.qty > 0 then
-        ownedMap[it.itemId] = (ownedMap[it.itemId] or 0) + it.qty
+      local itemId = tonumber(it.itemId)
+      if itemId and it.qty and it.qty > 0 then
+        ownedMap[itemId] = (ownedMap[itemId] or 0) + it.qty
         ownedCount = ownedCount + 1
       end
     end
@@ -265,16 +471,18 @@ local function buildMaps()
     for _, c in ipairs(owned.characters) do
       if type(c) == "table" and c.name and type(c.items) == "table" then
         for _, it in ipairs(c.items) do
-          if it.itemId and it.qty and it.qty > 0 then
-            local charMap = ownedByChar[it.itemId] or {}
+          local itemId = tonumber(it.itemId)
+          if itemId and it.qty and it.qty > 0 then
+            local charMap = ownedByChar[itemId] or {}
             charMap[c.name] = (charMap[c.name] or 0) + it.qty
-            ownedByChar[it.itemId] = charMap
+            ownedByChar[itemId] = charMap
           end
         end
       end
     end
   end
 
+  debugLog("snapshot prices=" .. tostring(priceCount) .. ", owned items=" .. tostring(ownedCount))
   return prices, priceCount, ownedMap, ownedCount, ownedByChar, snap, owned
 end
 
@@ -296,28 +504,41 @@ local function generatePlan()
   ensureDb()
   local prices, priceCount, ownedMap, ownedCount, ownedByChar, snap, owned = buildMaps()
 
-  local recipes = _G.ProfessionLevelerScan_RecipeTargets or _G.WowAhPlannerScan_RecipeTargets
+  local storedTargets = (FrugalForgeDB.targets and type(FrugalForgeDB.targets.targets) == "table" and #FrugalForgeDB.targets.targets > 0) and FrugalForgeDB.targets or nil
+  local recipes = storedTargets and storedTargets.targets or _G.FrugalScan_RecipeTargets or _G.ProfessionLevelerScan_RecipeTargets
   if type(recipes) ~= "table" or #recipes == 0 then
     local selected = FrugalForgeDB.settings.selectedProfessionId
     if selected then
       local built, err = buildTargetsForProfession(selected, FrugalForgeDB.settings.maxSkillDelta or 100)
       if not built then
-        DEFAULT_CHAT_FRAME:AddMessage("|cff7dd3fcFrugalForge|r: " .. tostring(err or "Failed to build targets"))
+        log(tostring(err or "Failed to build targets"))
         return
       end
-      applyTargets(built)
+      FrugalForgeDB.targets = {
+        professionId = built.profession.professionId,
+        professionName = built.profession.name,
+        targets = built.targets,
+        reagentIds = built.reagentIds,
+      }
+      applyTargetsSafe(built)
       recipes = built.targets
     else
-      print("|cff7dd3fcFrugalForge|r: No recipe targets found. Choose a profession in FrugalForge and build targets.")
+      log("No recipe targets found. Choose a profession and build targets.")
       return
     end
   end
 
-  local targetProfessionName = (snap and snap.targetProfessionName) or (_G.ProfessionLevelerScan_TargetProfessionName) or (_G.WowAhPlannerScan_TargetProfessionName)
+  debugLog("recipes loaded=" .. tostring(type(recipes) == "table" and #recipes or 0))
+  local activeTargetProfession = (storedTargets and storedTargets.professionName) or _G.FrugalScan_TargetProfessionName or _G.ProfessionLevelerScan_TargetProfessionName
+  local snapProfession = snap and snap.targetProfessionName or nil
+  local targetProfessionName = activeTargetProfession or snapProfession
+  if activeTargetProfession and snapProfession and normalizeProfessionName(activeTargetProfession) ~= normalizeProfessionName(snapProfession) then
+    debugLog("snapshot profession mismatch: snap=" .. tostring(snapProfession) .. " targets=" .. tostring(activeTargetProfession))
+  end
   local known, rank, maxRank = hasProfession(targetProfessionName)
   if targetProfessionName and not known then
-    local msg = string.format("|cff7dd3fcFrugalForge|r: Targets are for %s but this character does not know it. Install targets for your profession and /reload.", targetProfessionName)
-    DEFAULT_CHAT_FRAME:AddMessage(msg)
+    local msg = string.format("|cff7dd3fcFrugalForge|r: Targets are for %s but this character does not know it. Choose the profession in /frugal and Build Targets.", targetProfessionName)
+    log(msg)
     FrugalForgeDB.lastPlan = {
       generatedAt = ts(),
       generatedAtEpochUtc = time(),
@@ -334,16 +555,58 @@ local function generatePlan()
 
   local stepLines = {}
   local shopping = {}
+  local intermediatesAll = {}
   local totalCost = 0
   local missingPriceItems = {}
   local reagentKinds = {}
   local pricedKinds = {}
+
+  local useIntermediates = (FrugalForgeDB.settings.useCraftIntermediates ~= false)
+  local professionData = targetProfessionName and getProfessionByName(targetProfessionName) or nil
+  local recipeByOutput = buildRecipeByOutput(professionData)
+  local skillCap = nil
+  if targetProfessionName then
+    local okSkill, rank = hasProfession(targetProfessionName)
+    if okSkill and rank then
+      skillCap = rank + (FrugalForgeDB.settings.maxSkillDelta or 100)
+    end
+  end
+
+  local function expandItem(itemId, qty, visited, leaf, intermediates)
+    if not itemId or qty <= 0 then return end
+    if not useIntermediates then
+      leaf[itemId] = (leaf[itemId] or 0) + qty
+      return
+    end
+    local recipe = recipeByOutput[itemId]
+    if not recipe or (skillCap and recipe.minSkill and recipe.minSkill > skillCap) then
+      leaf[itemId] = (leaf[itemId] or 0) + qty
+      return
+    end
+    if visited[itemId] then
+      leaf[itemId] = (leaf[itemId] or 0) + qty
+      return
+    end
+    local outputQty = recipe.createsQuantity or 1
+    if outputQty <= 0 then outputQty = 1 end
+    local crafts = math.ceil(qty / outputQty)
+    intermediates[itemId] = (intermediates[itemId] or 0) + crafts
+    visited[itemId] = true
+    for _, reg in ipairs(recipe.reagents or {}) do
+      local regId = tonumber(reg.itemId or reg.id or reg[1] or reg)
+      local regQty = reg.qty or reg.quantity or 1
+      expandItem(regId, regQty * crafts, visited, leaf, intermediates)
+    end
+    visited[itemId] = nil
+  end
 
   for _, r in ipairs(recipes) do
     if type(r) == "table" then
       local reagents = nil
       if type(r.reagentsWithQty) == "table" and #r.reagentsWithQty > 0 then
         reagents = r.reagentsWithQty
+      elseif type(r.reagents) == "table" and #r.reagents > 0 and type(r.reagents[1]) == "table" then
+        reagents = r.reagents
       elseif type(r.reagents) == "table" then
         reagents = {}
         for _, itemId in ipairs(r.reagents) do
@@ -352,26 +615,38 @@ local function generatePlan()
       end
 
       if reagents then
+        local leaf = {}
+        local inter = {}
+        local visited = {}
+        for _, entry in ipairs(reagents) do
+          local itemId = tonumber(entry.itemId or entry.id or entry[1])
+          local qty = entry.qty or entry.quantity or 1
+          if itemId and qty and qty > 0 then
+            expandItem(itemId, qty, visited, leaf, inter)
+          end
+        end
+        for itemId, crafts in pairs(inter) do
+          intermediatesAll[itemId] = (intermediatesAll[itemId] or 0) + crafts
+        end
         local stepCost = 0
         local stepMissing = 0
-        for _, entry in ipairs(reagents) do
-          local itemId = entry.itemId or entry.id or entry[1]
-          local qty = entry.qty or entry.quantity or 1
+        for itemId, qty in pairs(leaf) do
           if itemId and qty and qty > 0 then
             local ownedQty = ownedMap[itemId] or 0
             local buy = math.max(0, qty - ownedQty)
-            if buy > 0 then
-              local price = prices[itemId]
-              if price then
-                stepCost = stepCost + price * buy
-                shopping[itemId] = shopping[itemId] or { need = 0, owned = 0, price = price }
-                shopping[itemId].need = shopping[itemId].need + qty
-                shopping[itemId].owned = shopping[itemId].owned + ownedQty
-                pricedKinds[itemId] = true
-              else
-                stepMissing = stepMissing + 1
-                missingPriceItems[itemId] = true
-              end
+            local price = prices[itemId]
+            if price then
+              pricedKinds[itemId] = true
+            else
+              missingPriceItems[itemId] = true
+            end
+            if buy > 0 and price then
+              stepCost = stepCost + price * buy
+              shopping[itemId] = shopping[itemId] or { need = 0, owned = 0, price = price }
+              shopping[itemId].need = shopping[itemId].need + qty
+              shopping[itemId].owned = shopping[itemId].owned + ownedQty
+            elseif buy > 0 and not price then
+              stepMissing = stepMissing + 1
             end
             reagentKinds[itemId] = true
           end
@@ -383,7 +658,7 @@ local function generatePlan()
           skillText = string.format(" (skill %s-%s)", tostring(r.minSkill), tostring(r.grayAt or ""))
         end
         table.insert(stepLines, string.format("- %s%s: cost %s%s",
-          r.recipeId or "recipe",
+          r.name or r.recipeId or "recipe",
           skillText,
           copperToText(stepCost),
           stepMissing > 0 and string.format(" (missing prices x%d)", stepMissing) or ""))
@@ -391,9 +666,33 @@ local function generatePlan()
     end
   end
 
-  local shoppingLines = { "Shopping list:" }
+  local shoppingLines = {}
+  if next(intermediatesAll) then
+    table.insert(shoppingLines, "Intermediates to craft:")
+    local interList = {}
+    for itemId, crafts in pairs(intermediatesAll) do
+      table.insert(interList, { itemId = itemId, crafts = crafts })
+    end
+    table.sort(interList, function(a, b)
+      return tostring(getItemName(a.itemId)) < tostring(getItemName(b.itemId))
+    end)
+    for _, it in ipairs(interList) do
+      table.insert(shoppingLines, string.format("  - %s (%d): craft %d", getItemName(it.itemId), it.itemId, it.crafts))
+    end
+    table.insert(shoppingLines, "")
+  end
+  table.insert(shoppingLines, "Shopping list:")
   local missingCount = 0
+  local shoppingList = {}
   for itemId, entry in pairs(shopping) do
+    table.insert(shoppingList, { itemId = itemId, entry = entry })
+  end
+  table.sort(shoppingList, function(a, b)
+    return tostring(getItemName(a.itemId)) < tostring(getItemName(b.itemId))
+  end)
+  for _, row in ipairs(shoppingList) do
+    local itemId = row.itemId
+    local entry = row.entry
     local buy = math.max(0, entry.need - entry.owned)
     local ownedBreakdown = ""
     local chars = ownedByChar[itemId]
@@ -406,8 +705,8 @@ local function generatePlan()
       ownedBreakdown = " [" .. table.concat(parts, ", ") .. "]"
     end
 
-    local line = string.format("  - item %d: need %d (owned %d%s), buy %d @ %s = %s",
-      itemId, entry.need, entry.owned, ownedBreakdown, buy, copperToText(entry.price), copperToText(entry.price * buy))
+    local line = string.format("  - %s (%d): need %d (owned %d%s), buy %d @ %s = %s",
+      getItemName(itemId), itemId, entry.need, entry.owned, ownedBreakdown, buy, copperToText(entry.price), copperToText(entry.price * buy))
     table.insert(shoppingLines, line)
   end
   for _ in pairs(missingPriceItems) do missingCount = missingCount + 1 end
@@ -415,7 +714,17 @@ local function generatePlan()
   local summaryLines = {}
   local snapCount = 0
   if snap and type(snap.prices) == "table" then snapCount = #snap.prices end
+  local reagentCount = 0
+  for _ in pairs(reagentKinds) do reagentCount = reagentCount + 1 end
+  local pricedOverlap = 0
+  for itemId in pairs(reagentKinds) do
+    if prices[itemId] then pricedOverlap = pricedOverlap + 1 end
+  end
   table.insert(summaryLines, string.format("Snapshot priced items: %d", snapCount))
+  table.insert(summaryLines, string.format("Targets: %d recipes, %d reagents", #recipes, reagentCount))
+  table.insert(summaryLines, string.format("Targets with prices: %d", pricedOverlap))
+  local targetIdsCount = type(_G.FrugalScan_TargetItemIds) == "table" and #_G.FrugalScan_TargetItemIds or 0
+  table.insert(summaryLines, string.format("Target itemIds: %d", targetIdsCount))
   table.insert(summaryLines, string.format("Total cost (priced items): %s", copperToText(totalCost)))
   local totalKinds = 0
   for _ in pairs(reagentKinds) do totalKinds = totalKinds + 1 end
@@ -427,11 +736,19 @@ local function generatePlan()
   if missingCount > 0 then
     table.insert(summaryLines, string.format("Missing prices for %d item(s); those steps are marked accordingly.", missingCount))
   end
+  if next(intermediatesAll) then
+    local count = 0
+    for _ in pairs(intermediatesAll) do count = count + 1 end
+    table.insert(summaryLines, string.format("Intermediates crafted: %d", count))
+  end
   if snapCount == 0 then
-    table.insert(summaryLines, "No prices found in snapshot. Run a scan at the AH and /reload.")
+    table.insert(summaryLines, "No prices found in snapshot. Run a scan at the AH.")
   end
   if targetProfessionName then
     table.insert(summaryLines, "Targets profession: " .. tostring(targetProfessionName))
+    if activeTargetProfession and snapProfession and normalizeProfessionName(activeTargetProfession) ~= normalizeProfessionName(snapProfession) then
+      table.insert(summaryLines, "Snapshot profession mismatch: " .. tostring(snapProfession))
+    end
     if known and rank and maxRank then
       table.insert(summaryLines, string.format("Your skill: %d/%d", rank, maxRank))
     end
@@ -458,7 +775,7 @@ local function generatePlan()
     summaryText = table.concat(summaryLines, "\n"),
   }
 
-  print("|cff7dd3fcFrugalForge|r: plan generated.")
+  log("Plan generated.")
   updateUi()
 end
 
@@ -466,14 +783,23 @@ local function createUi()
   if ui.frame then return end
 
   local f = CreateFrame("Frame", "FrugalForgeFrame", UIParent, "BasicFrameTemplateWithInset")
-  f:SetSize(580, 520)
+  f:SetSize(720, 680)
   f:SetPoint("CENTER")
   f:Hide()
   f:SetMovable(true)
   f:EnableMouse(true)
+  f:EnableKeyboard(true)
   f:RegisterForDrag("LeftButton")
   f:SetScript("OnDragStart", f.StartMoving)
   f:SetScript("OnDragStop", f.StopMovingOrSizing)
+  f:SetScript("OnKeyDown", function(self, key)
+    if key == "ESCAPE" then
+      self:Hide()
+      self:SetPropagateKeyboardInput(false)
+    else
+      self:SetPropagateKeyboardInput(true)
+    end
+  end)
 
   f.title = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
   f.title:SetPoint("TOP", 0, -8)
@@ -522,20 +848,7 @@ local function createUi()
   ui.buildTargetsBtn:SetPoint("TOPLEFT", 430, y - 10)
   ui.buildTargetsBtn:SetText("Build Targets")
   ui.buildTargetsBtn:SetScript("OnClick", function()
-    local selected = FrugalForgeDB.settings.selectedProfessionId
-    if not selected then
-      DEFAULT_CHAT_FRAME:AddMessage("|cff7dd3fcFrugalForge|r: Select a profession first.")
-      return
-    end
-    local delta = tonumber(ui.deltaBox:GetText() or "") or 100
-    FrugalForgeDB.settings.maxSkillDelta = delta
-    local built, err = buildTargetsForProfession(selected, delta)
-    if not built then
-      DEFAULT_CHAT_FRAME:AddMessage("|cff7dd3fcFrugalForge|r: " .. tostring(err or "Failed to build targets"))
-      return
-    end
-    applyTargets(built)
-    DEFAULT_CHAT_FRAME:AddMessage("|cff7dd3fcFrugalForge|r: Targets built for " .. tostring(built.profession.name))
+    buildTargetsFromUi()
   end)
 
   ui.scanBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
@@ -543,16 +856,29 @@ local function createUi()
   ui.scanBtn:SetPoint("TOPLEFT", 16, y - 32)
   ui.scanBtn:SetText("Scan AH")
   ui.scanBtn:SetScript("OnClick", function()
-    if type(SlashCmdList) == "table" and SlashCmdList["WAHPSCAN"] then
-      SlashCmdList["WAHPSCAN"]("start")
+    if type(SlashCmdList) == "table" and SlashCmdList["FRUGALSCAN"] then
+      SlashCmdList["FRUGALSCAN"]("start")
     else
-      DEFAULT_CHAT_FRAME:AddMessage("|cff7dd3fcFrugalForge|r: Scanner not loaded.")
+      log("Scanner not loaded.")
+    end
+  end)
+
+  ui.ownedBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+  ui.ownedBtn:SetSize(80, 22)
+  ui.ownedBtn:SetPoint("TOPLEFT", 196, y - 32)
+  ui.ownedBtn:SetText("Owned")
+  ui.ownedBtn:SetScript("OnClick", function()
+    if type(SlashCmdList) == "table" and SlashCmdList["FRUGALSCAN"] then
+      SlashCmdList["FRUGALSCAN"]("owned")
+      updateUi()
+    else
+      log("Scanner not loaded.")
     end
   end)
 
   ui.generateBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
   ui.generateBtn:SetSize(140, 22)
-  ui.generateBtn:SetPoint("TOPLEFT", 104, y - 32)
+  ui.generateBtn:SetPoint("TOPLEFT", 286, y - 32)
   ui.generateBtn:SetText("Generate Plan")
   ui.generateBtn:SetScript("OnClick", generatePlan)
 
@@ -575,6 +901,10 @@ local function createUi()
   ui.staleValue = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
   ui.staleValue:SetPoint("TOPLEFT", 16, y - 32)
   ui.staleValue:SetText("")
+
+  ui.summaryLabel = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  ui.summaryLabel:SetPoint("TOPLEFT", 16, y - 54)
+  ui.summaryLabel:SetText("Summary")
 
   UIDropDownMenu_Initialize(ui.profDrop, function(self, level)
     local info = UIDropDownMenu_CreateInfo()
@@ -599,14 +929,14 @@ local function createUi()
 
   -- Steps box
   local stepsScroll = CreateFrame("ScrollFrame", nil, f, "UIPanelScrollFrameTemplate")
-  stepsScroll:SetPoint("TOPLEFT", 16, y - 60)
+  stepsScroll:SetPoint("TOPLEFT", 16, y - 74)
   stepsScroll:SetPoint("RIGHT", -36, -8)
-  stepsScroll:SetHeight(160)
+  stepsScroll:SetHeight(170)
 
   local stepsBox = CreateFrame("EditBox", nil, stepsScroll)
   stepsBox:SetMultiLine(true)
   stepsBox:SetFontObject(GameFontHighlightSmall)
-  stepsBox:SetWidth(510)
+  stepsBox:SetWidth(640)
   stepsBox:SetAutoFocus(false)
   stepsBox:SetScript("OnEscapePressed", function() stepsBox:ClearFocus() end)
   stepsScroll:SetScrollChild(stepsBox)
@@ -616,12 +946,12 @@ local function createUi()
   local shopScroll = CreateFrame("ScrollFrame", nil, f, "UIPanelScrollFrameTemplate")
   shopScroll:SetPoint("TOPLEFT", stepsScroll, "BOTTOMLEFT", 0, -8)
   shopScroll:SetPoint("RIGHT", -36, -8)
-  shopScroll:SetHeight(120)
+  shopScroll:SetHeight(160)
 
   local shopBox = CreateFrame("EditBox", nil, shopScroll)
   shopBox:SetMultiLine(true)
   shopBox:SetFontObject(GameFontHighlightSmall)
-  shopBox:SetWidth(510)
+  shopBox:SetWidth(640)
   shopBox:SetAutoFocus(false)
   shopBox:SetScript("OnEscapePressed", function() shopBox:ClearFocus() end)
   shopScroll:SetScrollChild(shopBox)
@@ -630,12 +960,13 @@ local function createUi()
   -- Summary box
   local summaryScroll = CreateFrame("ScrollFrame", nil, f, "UIPanelScrollFrameTemplate")
   summaryScroll:SetPoint("TOPLEFT", shopScroll, "BOTTOMLEFT", 0, -8)
-  summaryScroll:SetPoint("BOTTOMRIGHT", -36, 16)
+  summaryScroll:SetPoint("RIGHT", -36, -8)
+  summaryScroll:SetHeight(170)
 
   local summaryBox = CreateFrame("EditBox", nil, summaryScroll)
   summaryBox:SetMultiLine(true)
   summaryBox:SetFontObject(GameFontHighlightSmall)
-  summaryBox:SetWidth(510)
+  summaryBox:SetWidth(640)
   summaryBox:SetAutoFocus(false)
   summaryBox:SetScript("OnEscapePressed", function() summaryBox:ClearFocus() end)
   summaryScroll:SetScrollChild(summaryBox)
@@ -656,7 +987,63 @@ end
 
 SLASH_FRUGALFORGE1 = "/frugal"
 SLASH_FRUGALFORGE2 = "/frugalforge"
-SlashCmdList["FRUGALFORGE"] = function()
+SlashCmdList["FRUGALFORGE"] = function(msg)
+  local cmd = string.lower(tostring(msg or "")):gsub("^%s+", ""):gsub("%s+$", "")
+  if cmd == "debug" then
+    FrugalForgeDB.settings.debug = true
+    local snap = latestSnapshot()
+    local snapCount = snap and type(snap.prices) == "table" and #snap.prices or 0
+    local owned = latestOwned()
+    local ownedCount = owned and type(owned.items) == "table" and #owned.items or 0
+    local selectedId = FrugalForgeDB.settings.selectedProfessionId
+    local selectedProf = selectedId and getProfessionById(selectedId) or nil
+    local debugLines = {
+      "DEBUG ENABLED",
+      "snap.prof=" .. tostring(snap and snap.targetProfessionName or "none"),
+      "targets.prof=" .. tostring(_G.FrugalScan_TargetProfessionName or _G.ProfessionLevelerScan_TargetProfessionName or "none"),
+      "targets.id=" .. tostring(_G.FrugalScan_TargetProfessionId or _G.ProfessionLevelerScan_TargetProfessionId or "none"),
+      "snapshot prices=" .. tostring(snapCount),
+      "targetItemIds=" .. tostring(type(_G.FrugalScan_TargetItemIds) == "table" and #_G.FrugalScan_TargetItemIds or 0),
+      "owned items=" .. tostring(ownedCount),
+      "selected.profId=" .. tostring(selectedId or "none"),
+      "selected.profName=" .. tostring(selectedProf and selectedProf.name or "none"),
+      "builtAt=" .. tostring(FrugalForgeDB.targetsBuiltAt or "none"),
+      "lastBuildMessage=" .. tostring(FrugalForgeDB.lastBuildMessage or "none"),
+      "lastBuildError=" .. tostring(FrugalForgeDB.lastBuildError or "none"),
+      "stored.targets.profName=" .. tostring(FrugalForgeDB.targets and FrugalForgeDB.targets.professionName or "none"),
+      "stored.targets.profId=" .. tostring(FrugalForgeDB.targets and FrugalForgeDB.targets.professionId or "none"),
+      "stored.targets.recipes=" .. tostring(FrugalForgeDB.targets and type(FrugalForgeDB.targets.targets) == "table" and #FrugalForgeDB.targets.targets or 0),
+    }
+    local text = table.concat(debugLines, "\n")
+    showTextFrame(text, "FrugalForge Debug")
+    for _, line in ipairs(debugLines) do
+      DEFAULT_CHAT_FRAME:AddMessage("|cff7dd3fcFrugalForge|r " .. line)
+    end
+    updateUi()
+    return
+  end
+  if cmd == "build" then
+    buildTargetsFromUi()
+    return
+  end
+  if cmd == "scan" or cmd == "start" then
+    if type(SlashCmdList) == "table" and SlashCmdList["FRUGALSCAN"] then
+      SlashCmdList["FRUGALSCAN"]("start")
+      return
+    else
+      DEFAULT_CHAT_FRAME:AddMessage("|cff7dd3fcFrugalForge|r: Scanner not loaded.")
+      return
+    end
+  elseif cmd == "owned" then
+    if type(SlashCmdList) == "table" and SlashCmdList["FRUGALSCAN"] then
+      SlashCmdList["FRUGALSCAN"]("owned")
+      updateUi()
+      return
+    else
+      DEFAULT_CHAT_FRAME:AddMessage("|cff7dd3fcFrugalForge|r: Scanner not loaded.")
+      return
+    end
+  end
   toggleUi()
 end
 

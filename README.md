@@ -17,13 +17,13 @@ In-game addon suite that generates profession leveling plans using in-game scans
 
 ### Scan + prices
 
-1) In-game at the Auction House: run a scan with `/wahpscan start`.
+1) In-game at the Auction House: run a scan with `/frugal scan`.
 2) `/reload` so SavedVariables are written.
 3) FrugalForge reads the scan automatically (no import/export).
 
 ### Owned materials
 
-1) In-game: `/wahpscan owned` then `/reload`.
+1) In-game: `/frugal owned` then `/reload`.
 2) FrugalForge reads owned materials automatically (per-character breakdown included).
 
 ### Build a plan

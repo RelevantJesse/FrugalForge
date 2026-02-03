@@ -1,4 +1,4 @@
-# ProfessionLeveler Addon: In-Game Planner Plan (draft)
+# FrugalForge Addon: In-Game Planner Plan (draft)
 
 ## Goals
 - Let players generate and view profession leveling plans fully in-game using data the addon already captures (price + owned snapshots), with no import/export steps.
@@ -42,15 +42,15 @@
 
 ## Data & Storage
 - **SavedVariables**
-  - `ProfessionLevelerScanDB`:
+  - `FrugalScanDB`:
     - `prices`: latest price snapshot per item (bid/buyout/median, seenAt).
     - `owned`: per-character owned counts with realm metadata.
     - `plan`: last generated plan (steps, shopping list, totals, metadata).
     - `settings`: user options (price rank, skill window, intermediates, showPanelOnAuctionHouse, verboseDebug).
     - `debugLog`: existing log buffer (retain).
-  - Maintain bridge fields to legacy `WowAhPlannerScan*` names for compatibility.
+  - Maintain bridge fields to legacy `ProfessionLevelerScan*` names for compatibility.
 - **Data inputs**
-  - Targets file: `ProfessionLevelerScan_Targets.lua` (already installed by app; keep same format with dual naming).
+  - Targets are built in-game (no external targets file).
   - Recipe data: embed a trimmed table for the current game version; keep IDs stable and small to reduce memory.
 
 ## Algorithms (in brief)
@@ -73,7 +73,7 @@
    - Define SavedVariables schema for FrugalForge (`plan`, `planItems`, `settings`, `meta`), plus compatibility bridges to read existing scanner snapshots/owned.
    - Embed/derive reagent quantities: either (a) consume full recipe data from an embedded compressed table, or (b) extend Targets generator to include reagent quantities per recipe. Choose (a) to avoid desktop dependency in-game.
 2. **Data ingest**
-   - Snapshot ingest: read latest price snapshot from ProfessionLevelerScanDB/WowAhPlannerScanDB; build item→price map with selected rank.
+   - Snapshot ingest: read latest price snapshot from FrugalScanDB; build item→price map with selected rank.
    - Owned ingest: read owned snapshot; build item→owned map plus per-character breakdown.
    - Targets ingest: read recipe targets with skill bands and reagent quantities.
 3. **Planner algorithm (Lua)**
