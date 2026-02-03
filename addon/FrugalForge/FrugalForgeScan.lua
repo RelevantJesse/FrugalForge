@@ -508,6 +508,29 @@ local function FinishSnapshot()
 
   table.sort(snapshot.prices, function(a, b) return a.itemId < b.itemId end)
 
+  if state.mergeWithLast == true then
+    local base = (FrugalScanDB and FrugalScanDB.lastSnapshot) or (ProfessionLevelerScanDB and ProfessionLevelerScanDB.lastSnapshot) or nil
+    if base and type(base.prices) == "table" then
+      local merged = {}
+      for _, p in ipairs(base.prices) do
+        if p and p.itemId then
+          merged[p.itemId] = p
+        end
+      end
+      for _, p in ipairs(snapshot.prices) do
+        if p and p.itemId then
+          merged[p.itemId] = p
+        end
+      end
+      snapshot.prices = {}
+      for _, p in pairs(merged) do
+        table.insert(snapshot.prices, p)
+      end
+      table.sort(snapshot.prices, function(a, b) return a.itemId < b.itemId end)
+    end
+  end
+  state.mergeWithLast = false
+
   FrugalScanDB.lastSnapshot = snapshot
   FrugalScanDB.lastSnapshotJson = BuildExportJsonFromSnapshot(snapshot)
   FrugalScanDB.lastGeneratedAtEpochUtc = snapshot.generatedAtEpochUtc
@@ -953,6 +976,27 @@ end
 
 local function QueueItems()
   state.queue = {}
+
+  if FrugalScan_ForceTargetItemIds == true then
+    FrugalScan_ForceTargetItemIds = nil
+    state.mergeWithLast = true
+    local targets = _G.FrugalScan_TargetItemIds or _G.ProfessionLevelerScan_TargetItemIds or {}
+    if type(targets) ~= "table" then targets = {} end
+    for _, itemId in ipairs(targets) do
+      if type(itemId) == "number" and itemId > 0 then
+        table.insert(state.queue, itemId)
+      end
+    end
+    if #state.queue == 0 then
+      Print("Queued 0 items. Missing-price list was empty.")
+    else
+      table.sort(state.queue, function(a, b) return a < b end)
+      Print("Queued " .. tostring(#state.queue) .. " missing-price items.")
+    end
+    return
+  end
+
+  state.mergeWithLast = false
 
   local recipeTargets = FrugalScan_RecipeTargets
   local professionId = FrugalScan_TargetProfessionId

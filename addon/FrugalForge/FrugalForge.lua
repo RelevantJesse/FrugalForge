@@ -167,7 +167,11 @@ end
 
 local function debugLog(msg)
   if FrugalForgeDB and FrugalForgeDB.settings and FrugalForgeDB.settings.debug == true then
-    log("DEBUG: " .. tostring(msg))
+    FrugalForgeDB.debugLog = FrugalForgeDB.debugLog or {}
+    table.insert(FrugalForgeDB.debugLog, "DEBUG: " .. tostring(msg))
+    if #FrugalForgeDB.debugLog > 200 then
+      table.remove(FrugalForgeDB.debugLog, 1)
+    end
   end
 end
 
@@ -394,8 +398,10 @@ local function updateUi()
   end
 
   local owned = latestOwned()
-  if owned and owned.snapshotTimestampUtc then
-    ui.ownedValue:SetText(string.format("Owned: %s (%s)", owned.snapshotTimestampUtc, fmtAge(owned.snapshotTimestampUtc)))
+  if owned and (owned.snapshotTimestampUtc or owned.generatedAtEpochUtc) then
+    local epoch = getSnapshotEpoch(owned)
+    local tsText = owned.snapshotTimestampUtc or "unknown"
+    ui.ownedValue:SetText(string.format("Owned: %s (%s)", tsText, fmtAge(epoch)))
   else
     ui.ownedValue:SetText("Owned: none found (run /frugal owned)")
   end
@@ -408,7 +414,10 @@ local function updateUi()
     if plan.summaryText then
       local lines = {}
       for line in string.gmatch(plan.summaryText, "[^\r\n]+") do
-        if not string.match(line, "^%s*DEBUG") and not string.match(line, "^%s*Debug:") then
+        if not string.match(line, "^%s*DEBUG") and
+           not string.match(line, "^%s*Debug:") and
+           not string.match(line, "^%s*Targets profession:") and
+           not string.match(line, "^%s*Your skill:") then
           table.insert(lines, line)
         end
       end
@@ -554,6 +563,7 @@ local function generatePlan()
   end
 
   local stepLines = {}
+  local stepCandidates = {}
   local shopping = {}
   local intermediatesAll = {}
   local totalCost = 0
@@ -600,6 +610,11 @@ local function generatePlan()
     visited[itemId] = nil
   end
 
+  local currentSkill = nil
+  if targetProfessionName then
+    currentSkill = select(1, getProfessionSkillByName(targetProfessionName))
+  end
+
   for _, r in ipairs(recipes) do
     if type(r) == "table" then
       local reagents = nil
@@ -638,7 +653,9 @@ local function generatePlan()
             if price then
               pricedKinds[itemId] = true
             else
-              missingPriceItems[itemId] = true
+              if buy > 0 then
+                missingPriceItems[itemId] = true
+              end
             end
             if buy > 0 and price then
               stepCost = stepCost + price * buy
@@ -647,41 +664,105 @@ local function generatePlan()
               shopping[itemId].owned = shopping[itemId].owned + ownedQty
             elseif buy > 0 and not price then
               stepMissing = stepMissing + 1
+              shopping[itemId] = shopping[itemId] or { need = 0, owned = 0, price = nil, missing = true }
+              shopping[itemId].need = shopping[itemId].need + qty
+              shopping[itemId].owned = shopping[itemId].owned + ownedQty
             end
             reagentKinds[itemId] = true
           end
         end
 
         totalCost = totalCost + stepCost
-        local skillText = ""
-        if r.minSkill then
-          skillText = string.format(" (skill %s-%s)", tostring(r.minSkill), tostring(r.grayAt or ""))
+        local isIntermediate = r.createsItemId and intermediatesAll[r.createsItemId]
+        if not isIntermediate then
+          local startSkill = r.minSkill or 0
+          if currentSkill and startSkill < currentSkill then
+            startSkill = currentSkill
+          end
+          local grayAt = r.grayAt or ""
+          table.insert(stepCandidates, {
+            minSkill = startSkill,
+            grayAt = grayAt,
+            name = r.name or r.recipeId or "recipe",
+            cost = stepCost,
+            missing = stepMissing,
+            outputItemId = r.createsItemId,
+          })
         end
-        table.insert(stepLines, string.format("- %s%s: cost %s%s",
-          r.name or r.recipeId or "recipe",
-          skillText,
-          copperToText(stepCost),
-          stepMissing > 0 and string.format(" (missing prices x%d)", stepMissing) or ""))
       end
     end
   end
 
-  local shoppingLines = {}
-  if next(intermediatesAll) then
-    table.insert(shoppingLines, "Intermediates to craft:")
-    local interList = {}
-    for itemId, crafts in pairs(intermediatesAll) do
-      table.insert(interList, { itemId = itemId, crafts = crafts })
+  local bestByMin = {}
+  for _, s in ipairs(stepCandidates) do
+    local key = tostring(s.minSkill)
+    local existing = bestByMin[key]
+    if not existing then
+      bestByMin[key] = s
+    else
+      if (s.missing or 0) < (existing.missing or 0) then
+        bestByMin[key] = s
+      elseif (s.missing or 0) == (existing.missing or 0) and (s.cost or 0) < (existing.cost or 0) then
+        bestByMin[key] = s
+      end
     end
-    table.sort(interList, function(a, b)
-      return tostring(getItemName(a.itemId)) < tostring(getItemName(b.itemId))
-    end)
-    for _, it in ipairs(interList) do
-      table.insert(shoppingLines, string.format("  - %s (%d): craft %d", getItemName(it.itemId), it.itemId, it.crafts))
-    end
-    table.insert(shoppingLines, "")
   end
-  table.insert(shoppingLines, "Shopping list:")
+
+  local stepsOrdered = {}
+  for _, v in pairs(bestByMin) do table.insert(stepsOrdered, v) end
+  table.sort(stepsOrdered, function(a, b)
+    if a.minSkill == b.minSkill then return tostring(a.name) < tostring(b.name) end
+    return a.minSkill < b.minSkill
+  end)
+
+  local stepOutputs = {}
+  for _, s in ipairs(stepsOrdered) do
+    if s.outputItemId then
+      stepOutputs[s.outputItemId] = true
+    end
+  end
+
+  local mergedLines = {}
+  for _, s in ipairs(stepsOrdered) do
+    local skillText = string.format(" (skill %s-%s)", tostring(s.minSkill), tostring(s.grayAt))
+    table.insert(mergedLines, {
+      sortKey = s.minSkill or 0,
+      kind = "step",
+      text = string.format("- %s%s: cost %s%s",
+        s.name,
+        skillText,
+        copperToText(s.cost),
+        (s.missing and s.missing > 0) and string.format(" (missing prices x%d)", s.missing) or "")
+    })
+  end
+
+  if next(intermediatesAll) then
+    for itemId, crafts in pairs(intermediatesAll) do
+      if not stepOutputs[itemId] then
+        local recipe = recipeByOutput[itemId]
+        local minSkill = (recipe and recipe.minSkill) or 0
+        table.insert(mergedLines, {
+          sortKey = minSkill,
+          kind = "intermediate",
+          text = string.format("- %s (%d): craft %d", getItemName(itemId), itemId, crafts)
+        })
+      end
+    end
+  end
+
+  table.sort(mergedLines, function(a, b)
+    if a.sortKey == b.sortKey then
+      if a.kind == b.kind then return a.text < b.text end
+      return a.kind == "step"
+    end
+    return a.sortKey < b.sortKey
+  end)
+
+  for _, line in ipairs(mergedLines) do
+    table.insert(stepLines, line.text)
+  end
+
+  local shoppingLines = { "Shopping list:" }
   local missingCount = 0
   local shoppingList = {}
   for itemId, entry in pairs(shopping) do
@@ -705,8 +786,11 @@ local function generatePlan()
       ownedBreakdown = " [" .. table.concat(parts, ", ") .. "]"
     end
 
-    local line = string.format("  - %s (%d): need %d (owned %d%s), buy %d @ %s = %s",
-      getItemName(itemId), itemId, entry.need, entry.owned, ownedBreakdown, buy, copperToText(entry.price), copperToText(entry.price * buy))
+    local priceText = entry.price and copperToText(entry.price) or "missing price"
+    local totalText = entry.price and copperToText(entry.price * buy) or "?"
+    local missingTag = entry.price and "" or " (missing price)"
+    local line = string.format("  - %s (%d): need %d (owned %d%s), buy %d @ %s = %s%s",
+      getItemName(itemId), itemId, entry.need, entry.owned, ownedBreakdown, buy, priceText, totalText, missingTag)
     table.insert(shoppingLines, line)
   end
   for _ in pairs(missingPriceItems) do missingCount = missingCount + 1 end
@@ -735,11 +819,6 @@ local function generatePlan()
   table.insert(summaryLines, string.format("Owned items counted: %d unique", ownedCount or 0))
   if missingCount > 0 then
     table.insert(summaryLines, string.format("Missing prices for %d item(s); those steps are marked accordingly.", missingCount))
-  end
-  if next(intermediatesAll) then
-    local count = 0
-    for _ in pairs(intermediatesAll) do count = count + 1 end
-    table.insert(summaryLines, string.format("Intermediates crafted: %d", count))
   end
   if snapCount == 0 then
     table.insert(summaryLines, "No prices found in snapshot. Run a scan at the AH.")
@@ -773,6 +852,12 @@ local function generatePlan()
     stepsText = table.concat(stepLines, "\n"),
     shoppingText = table.concat(shoppingLines, "\n"),
     summaryText = table.concat(summaryLines, "\n"),
+    missingPriceItemIds = (function()
+      local ids = {}
+      for itemId in pairs(missingPriceItems) do table.insert(ids, itemId) end
+      table.sort(ids)
+      return ids
+    end)(),
   }
 
   log("Plan generated.")
@@ -783,7 +868,7 @@ local function createUi()
   if ui.frame then return end
 
   local f = CreateFrame("Frame", "FrugalForgeFrame", UIParent, "BasicFrameTemplateWithInset")
-  f:SetSize(720, 680)
+  f:SetSize(740, 740)
   f:SetPoint("CENTER")
   f:Hide()
   f:SetMovable(true)
@@ -856,6 +941,31 @@ local function createUi()
   ui.scanBtn:SetPoint("TOPLEFT", 16, y - 32)
   ui.scanBtn:SetText("Scan AH")
   ui.scanBtn:SetScript("OnClick", function()
+    if FrugalForgeDB.targets and type(FrugalForgeDB.targets.reagentIds) == "table" then
+      FrugalScan_TargetItemIds = FrugalForgeDB.targets.reagentIds
+      ProfessionLevelerScan_TargetItemIds = FrugalForgeDB.targets.reagentIds
+    end
+    if type(SlashCmdList) == "table" and SlashCmdList["FRUGALSCAN"] then
+      SlashCmdList["FRUGALSCAN"]("start")
+    else
+      log("Scanner not loaded.")
+    end
+  end)
+
+  ui.scanMissingBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+  ui.scanMissingBtn:SetSize(100, 22)
+  ui.scanMissingBtn:SetPoint("LEFT", ui.scanBtn, "RIGHT", 8, 0)
+  ui.scanMissingBtn:SetText("Scan Missing")
+  ui.scanMissingBtn:SetScript("OnClick", function()
+    local ids = FrugalForgeDB.lastPlan and FrugalForgeDB.lastPlan.missingPriceItemIds or nil
+    if type(ids) ~= "table" or #ids == 0 then
+      log("No missing-price items to scan. Generate a plan first.")
+      return
+    end
+    FrugalScan_TargetItemIds = ids
+    ProfessionLevelerScan_TargetItemIds = ids
+    FrugalScan_ForceTargetItemIds = true
+    log("Scanning missing prices (" .. tostring(#ids) .. " items)...")
     if type(SlashCmdList) == "table" and SlashCmdList["FRUGALSCAN"] then
       SlashCmdList["FRUGALSCAN"]("start")
     else
@@ -865,7 +975,7 @@ local function createUi()
 
   ui.ownedBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
   ui.ownedBtn:SetSize(80, 22)
-  ui.ownedBtn:SetPoint("TOPLEFT", 196, y - 32)
+  ui.ownedBtn:SetPoint("LEFT", ui.scanMissingBtn, "RIGHT", 8, 0)
   ui.ownedBtn:SetText("Owned")
   ui.ownedBtn:SetScript("OnClick", function()
     if type(SlashCmdList) == "table" and SlashCmdList["FRUGALSCAN"] then
@@ -878,7 +988,7 @@ local function createUi()
 
   ui.generateBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
   ui.generateBtn:SetSize(140, 22)
-  ui.generateBtn:SetPoint("TOPLEFT", 286, y - 32)
+  ui.generateBtn:SetPoint("LEFT", ui.ownedBtn, "RIGHT", 8, 0)
   ui.generateBtn:SetText("Generate Plan")
   ui.generateBtn:SetScript("OnClick", generatePlan)
 
@@ -931,12 +1041,12 @@ local function createUi()
   local stepsScroll = CreateFrame("ScrollFrame", nil, f, "UIPanelScrollFrameTemplate")
   stepsScroll:SetPoint("TOPLEFT", 16, y - 74)
   stepsScroll:SetPoint("RIGHT", -36, -8)
-  stepsScroll:SetHeight(170)
+  stepsScroll:SetHeight(200)
 
   local stepsBox = CreateFrame("EditBox", nil, stepsScroll)
   stepsBox:SetMultiLine(true)
   stepsBox:SetFontObject(GameFontHighlightSmall)
-  stepsBox:SetWidth(640)
+  stepsBox:SetWidth(660)
   stepsBox:SetAutoFocus(false)
   stepsBox:SetScript("OnEscapePressed", function() stepsBox:ClearFocus() end)
   stepsScroll:SetScrollChild(stepsBox)
@@ -946,12 +1056,12 @@ local function createUi()
   local shopScroll = CreateFrame("ScrollFrame", nil, f, "UIPanelScrollFrameTemplate")
   shopScroll:SetPoint("TOPLEFT", stepsScroll, "BOTTOMLEFT", 0, -8)
   shopScroll:SetPoint("RIGHT", -36, -8)
-  shopScroll:SetHeight(160)
+  shopScroll:SetHeight(200)
 
   local shopBox = CreateFrame("EditBox", nil, shopScroll)
   shopBox:SetMultiLine(true)
   shopBox:SetFontObject(GameFontHighlightSmall)
-  shopBox:SetWidth(640)
+  shopBox:SetWidth(660)
   shopBox:SetAutoFocus(false)
   shopBox:SetScript("OnEscapePressed", function() shopBox:ClearFocus() end)
   shopScroll:SetScrollChild(shopBox)
@@ -961,12 +1071,12 @@ local function createUi()
   local summaryScroll = CreateFrame("ScrollFrame", nil, f, "UIPanelScrollFrameTemplate")
   summaryScroll:SetPoint("TOPLEFT", shopScroll, "BOTTOMLEFT", 0, -8)
   summaryScroll:SetPoint("RIGHT", -36, -8)
-  summaryScroll:SetHeight(170)
+  summaryScroll:SetHeight(200)
 
   local summaryBox = CreateFrame("EditBox", nil, summaryScroll)
   summaryBox:SetMultiLine(true)
   summaryBox:SetFontObject(GameFontHighlightSmall)
-  summaryBox:SetWidth(640)
+  summaryBox:SetWidth(660)
   summaryBox:SetAutoFocus(false)
   summaryBox:SetScript("OnEscapePressed", function() summaryBox:ClearFocus() end)
   summaryScroll:SetScrollChild(summaryBox)
@@ -1016,9 +1126,6 @@ SlashCmdList["FRUGALFORGE"] = function(msg)
     }
     local text = table.concat(debugLines, "\n")
     showTextFrame(text, "FrugalForge Debug")
-    for _, line in ipairs(debugLines) do
-      DEFAULT_CHAT_FRAME:AddMessage("|cff7dd3fcFrugalForge|r " .. line)
-    end
     updateUi()
     return
   end
