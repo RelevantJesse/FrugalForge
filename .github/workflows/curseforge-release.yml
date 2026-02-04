@@ -149,4 +149,4 @@ jobs:
         env:
           CURSEFORGE_API_TOKEN: ${{ secrets.CURSEFORGE_API_TOKEN }}
           CURSEFORGE_PROJECT_ID: ${{ secrets.CURSEFORGE_PROJECT_ID }}
-          ZIP_FILE: ${{ steps.zip.outputs.file }}
+          ZIP_FILE: ${{ steps.pack.outputs.file }}
