@@ -70,16 +70,20 @@ jobs:
             echo "CURSEFORGE_API_TOKEN is not set" >&2
             exit 1
           fi
-          tbc_type_id=$(curl -sS -H "X-Api-Token: ${CURSEFORGE_API_TOKEN}" \
-            "https://wow.curseforge.com/api/game/versions" \
-            | jq -r '.[] | select((.name|ascii_downcase) | test("burning crusade")) | .gameVersionTypeID' | head -n 1)
+          versions=$(curl -sS -H "X-Api-Token: ${CURSEFORGE_API_TOKEN}" \
+            "https://wow.curseforge.com/api/game/versions")
+          tbc_type_id=$(echo "$versions" | jq -r '[.[] | select(.name|test("^2\\.5\\.")) | .gameVersionTypeID] | first')
+          if [ -z "$tbc_type_id" ] || [ "$tbc_type_id" = "null" ]; then
+            tbc_type_id=$(echo "$versions" | jq -r '.[] | select((.name|ascii_downcase) | test("burning crusade")) | .gameVersionTypeID' | head -n 1)
+          fi
           if [ -z "$tbc_type_id" ] || [ "$tbc_type_id" = "null" ]; then
             echo "Failed to resolve TBC version type id" >&2
+            echo "Sample versions:" >&2
+            echo "$versions" | jq -r '.[] | "\(.gameVersionTypeID)\t\(.name)"' | head -n 30 >&2
             exit 1
           fi
 
-          tbc_versions=$(curl -sS -H "X-Api-Token: ${CURSEFORGE_API_TOKEN}" \
-            "https://wow.curseforge.com/api/game/versions" \
+          tbc_versions=$(echo "$versions" \
             | jq -r --argjson type "$tbc_type_id" '.[] | select(.gameVersionTypeID==$type) | .id' \
             | paste -sd "," -)
           if [ -z "$tbc_versions" ]; then
