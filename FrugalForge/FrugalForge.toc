@@ -2,7 +2,7 @@
 ## Title: FrugalForge
 ## Notes: In-game profession planner (beta) that reads scans from FrugalScan.
 ## Author: ProfessionLeveler
-## Version: 0.2.5
+## Version: 1.0.0
 ## SavedVariables: FrugalForgeDB, FrugalScanDB, ProfessionLevelerScanDB, FrugalScan_TargetItemIds, ProfessionLevelerScan_TargetItemIds
 
 FrugalForge_Data_Anniversary.lua

@@ -209,10 +209,11 @@ local function ParseItemIdFromLink(link)
 end
 
 local QUALITY_COMMON = 1
+local QUALITY_UNCOMMON = 2
 local function IsScanQualityAllowed(itemId)
   local _, _, quality = GetItemInfo(itemId)
   if quality == nil then return true end
-  return quality <= QUALITY_COMMON
+  return quality <= QUALITY_UNCOMMON
 end
 
 local function ExtractAuctionRow(listType, index)
@@ -586,6 +587,19 @@ local function BuildWantedItemIdSet()
       if n and n > 0 and not wanted[n] then
         wanted[n] = true
         count = count + 1
+      end
+    end
+  end
+
+  if count == 0 and type(_G.FrugalForgeDB) == "table" and type(_G.FrugalForgeDB.targets) == "table" then
+    local t = _G.FrugalForgeDB.targets
+    if type(t.reagentIds) == "table" then
+      for _, itemId in ipairs(t.reagentIds) do
+        local n = tonumber(itemId)
+        if n and n > 0 and not wanted[n] then
+          wanted[n] = true
+          count = count + 1
+        end
       end
     end
   end
