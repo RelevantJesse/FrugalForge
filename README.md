@@ -1,73 +1,92 @@
-# Profession Leveler
+# FrugalForge (Anniversary) — In‑Game Profession Leveling Planner
 
-In-game addon suite that generates profession leveling plans using in-game scans and owned material snapshots.
+FrugalForge is a single‑addon solution for Classic/Anniversary that scans Auction House prices, tracks owned
+materials, and generates a full profession leveling plan entirely in‑game. No web app, no import/export.
 
-## Quick start (recommended)
+———
 
-1) Go to the repo's **Releases** page
-2) Click the latest version and download the `.zip`
-3) Extract the zip somewhere (like your Desktop) and open the extracted folder
-4) Copy the addons from the `addon/` folder into your WoW AddOns directory
+## ✅ Key Features
 
-### Install the in-game addons
+- All‑in‑game planning
+Build targets, scan prices, capture owned mats, and generate a plan without leaving WoW.
+- Auction House scanner
+Uses the legacy AH browse API (QueryAuctionItems) with exact‑name searches for reliable pricing.
+- Owned materials support
+Pulls inventory from BagBrother (Bagnon) and subtracts what you already own.
+- Crafting intermediates
+Automatically expands craftable reagents (e.g., settings, bolts, wire) so you don’t buy things you can make.
+- Clear shopping list
+Shows item names, quantities needed, owned counts, and total costs.
+- Debug tools
+/frugal debug opens a selectable modal with detailed info for troubleshooting.
 
-1) Copy `FrugalForge/` into your WoW Anniversary AddOns folder, for example:
-   - `...\World of Warcraft\_anniversary_\Interface\AddOns\`
-2) In WoW, `/reload` so the addon initializes. Use `/frugal` to open the planner UI.
+———
 
-### Scan + prices
+## ⚙️ How It Works
 
-1) In-game at the Auction House: run a scan with `/frugal scan`.
-2) `/reload` so SavedVariables are written.
-3) FrugalForge reads the scan automatically (no import/export).
+1. Build Targets
+Open /frugal, pick your profession, set skill range, click Build Targets.
+2. Scan Auction House
+Go to the AH and run /frugalscan start (or click Scan AH).
+3. Capture Owned Mats
+Run /frugalscan owned to record your inventory (requires BagBrother).
+4. Generate Plan
+Click Generate Plan to get:
+- Step‑by‑step recipe plan
+- Intermediate crafts (if any)
+- Shopping list with prices
 
-### Owned materials
+———
 
-1) In-game: `/frugal owned` then `/reload`.
-2) FrugalForge reads owned materials automatically (per-character breakdown included).
+## 📦 Requirements
 
-### Build a plan
+- WoW Classic Anniversary
+- BagBrother (Bagnon) for owned material tracking
+(Addon still works without it, but owned counts will be “unknown”)
 
-1) `/frugal` in-game.
-2) Pick a profession and click **Build Targets**.
-3) Run a scan at the Auction House.
-4) Click **Generate Plan** in FrugalForge. Steps + shopping list use only priced or owned reagents.
+———
 
-## Build
+## 🧾 Commands
 
-`dotnet build WowAhPlanner.slnx`
+Main UI
 
-## Run (local dev)
+- /frugal — Open FrugalForge UI
+- /frugal build — Build targets
+- /frugal debug — Open debug modal
 
-`dotnet run --project src/WowAhPlanner.WinForms`
+Scanner
 
-## Test
+- /frugalscan start — Full scan
+- /frugalscan stop — Stop scan
+- /frugalscan status — Scan status
+- /frugalscan item &lt;itemId|link&gt; — Scan one item
+- /frugalscan owned — Export owned mats
+- /frugalscan owneddebug — Owned diagnostics
+- /frugalscan options — Scanner settings
+- /frugalscan panel — Toggle AH panel
+- /frugalscan log — Show scan log
 
-`dotnet test`
+———
 
-## Sample data
+## ⚠️ Notes
 
-- Profession + items data packs: `data/Era/items.json`, `data/Era/professions/cooking.json`
-- Anniversary packs (active development): `data/Anniversary/items.json`, `data/Anniversary/professions/*.json`, `data/Anniversary/producers.json`
-- Deterministic stub prices:
-  - `data/Era/stub-prices.json`
-  - `data/Anniversary/stub-prices.json`
+- Legacy AH API can be slow or rate‑limited. If scans stall, raise the scan interval in Options.
+- Exact‑match searches are used to avoid bad pricing.
+- Bid‑only auctions are ignored (buyout only).
+- No reload required to use scans/owned for the planner.
 
-## In-game workflow
+———
 
-- Open `/frugal` and choose a profession.
-- Click **Build Targets** (writes targets into SavedVariables for the scanner).
-- Scan at the Auction House, then `/reload` so the snapshot is saved.
-- Use **Generate Plan** in FrugalForge.
+## ✅ Status
 
-Addon docs: `docs/addon.md`
+- Alpha for Anniversary (single‑version for now)
+- Actively developed
+Feedback welcome.
 
-## Phase 2
+———
 
-See `Phase2.md` for the plan to scale Anniversary/TBC and beyond (full recipe packs + additional price ingestion options).
+## 🔗 Links
 
-## Tests included
+- Issues / feedback: https://github.com/RelevantJesse/WowClassicProfessionCosts
 
-- Planner chooses cheapest recipe: `tests/WowAhPlanner.Tests/PlannerServiceTests.cs`
-- Shopping list quantity aggregation: `tests/WowAhPlanner.Tests/PlannerServiceTests.cs`
-- Data pack loader validation (missing required fields): `tests/WowAhPlanner.Tests/DataPackLoaderTests.cs`
+———
