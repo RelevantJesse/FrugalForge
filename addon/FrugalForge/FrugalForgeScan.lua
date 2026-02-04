@@ -45,7 +45,6 @@ local function EnsureDb()
   if type(s.maxTimeoutRetriesPerPage) ~= "number" then s.maxTimeoutRetriesPerPage = 3 end
   if type(s.priceRank) ~= "number" then s.priceRank = 3 end
 
-  s.showPanelOnAuctionHouse = (s.showPanelOnAuctionHouse ~= false)
   s.verboseDebug = (s.verboseDebug == true)
 end
 
@@ -142,6 +141,7 @@ end
 local state = {
   running = false,
   queue = {},
+  total = 0,
   currentItemId = nil,
   currentQueryName = nil,
   page = 0,
@@ -157,6 +157,20 @@ local state = {
   pendingItemInfoId = nil,
   lastSendMethod = nil, -- "ui" | "api"
 }
+
+local function UpdateStatus()
+  _G.FrugalScan_ScanStatus = _G.FrugalScan_ScanStatus or {}
+  local s = _G.FrugalScan_ScanStatus
+  s.running = state.running
+  s.remaining = #state.queue
+  s.total = state.total or #state.queue
+  s.currentItemId = state.currentItemId
+  s.currentName = state.currentQueryName
+  s.startedAt = state.startedAt
+  if type(_G.FrugalForge_UpdateScanStatus) == "function" then
+    pcall(_G.FrugalForge_UpdateScanStatus)
+  end
+end
 
 local function GetSetting(name, defaultValue)
   local settings = FrugalScanDB and FrugalScanDB.settings or nil
@@ -232,6 +246,13 @@ local function ParseItemIdFromLink(link)
   if not link then return nil end
   local id = string.match(link, "item:(%d+)")
   return id and tonumber(id) or nil
+end
+
+local QUALITY_COMMON = 1
+local function IsScanQualityAllowed(itemId)
+  local _, _, quality = GetItemInfo(itemId)
+  if quality == nil then return true end
+  return quality <= QUALITY_COMMON
 end
 
 local function ExtractAuctionRow(listType, index)
@@ -539,6 +560,8 @@ local function FinishSnapshot()
   state.currentItemId = nil
   state.queue = {}
   state.awaiting = false
+  state.total = 0
+  UpdateStatus()
 
   Print("Scan complete. Items priced: " .. tostring(#(snapshot.prices or {})) .. ".")
 end
@@ -595,6 +618,7 @@ local function BuildWantedItemIdSet()
       end
     end
   end
+
 
   if type(FrugalScan_OwnedItemIds) == "table" then
     for _, itemId in ipairs(FrugalScan_OwnedItemIds) do
@@ -907,9 +931,7 @@ local function ExportOwned()
     FrugalForgeDB.lastOwnedSnapshot = snapshot
   end
   FrugalScanDB.lastOwnedJson = json
-
-  ShowExportFrame(json, "FrugalForge Owned Items")
-  Print("Owned export ready (" .. tostring(snapshot.itemCount or 0) .. " items).")
+  Print("Owned items imported (" .. tostring(snapshot.itemCount or 0) .. " items).")
 end
 
 ShowExportFrame = function(textOverride, titleOverride)
@@ -976,6 +998,11 @@ end
 
 local function QueueItems()
   state.queue = {}
+  local function TryQueue(itemId)
+    if type(itemId) == "number" and itemId > 0 and IsScanQualityAllowed(itemId) then
+      table.insert(state.queue, itemId)
+    end
+  end
 
   if FrugalScan_ForceTargetItemIds == true then
     FrugalScan_ForceTargetItemIds = nil
@@ -983,9 +1010,7 @@ local function QueueItems()
     local targets = _G.FrugalScan_TargetItemIds or _G.ProfessionLevelerScan_TargetItemIds or {}
     if type(targets) ~= "table" then targets = {} end
     for _, itemId in ipairs(targets) do
-      if type(itemId) == "number" and itemId > 0 then
-        table.insert(state.queue, itemId)
-      end
+      TryQueue(itemId)
     end
     if #state.queue == 0 then
       Print("Queued 0 items. Missing-price list was empty.")
@@ -993,6 +1018,8 @@ local function QueueItems()
       table.sort(state.queue, function(a, b) return a < b end)
       Print("Queued " .. tostring(#state.queue) .. " missing-price items.")
     end
+    state.total = #state.queue
+    UpdateStatus()
     return
   end
 
@@ -1001,8 +1028,8 @@ local function QueueItems()
   local recipeTargets = FrugalScan_RecipeTargets
   local professionId = FrugalScan_TargetProfessionId
   local professionName = FrugalScan_TargetProfessionName
-  if type(_G.FrugalForgeDB) == "table" and type(_G.FrugalForgeDB.targets) == "table" then
-    local t = _G.FrugalForgeDB.targets
+  if type(_G.FrugalForgeDB) == "table" and (type(_G.FrugalForgeDB.scanTargets) == "table" or type(_G.FrugalForgeDB.targets) == "table") then
+    local t = _G.FrugalForgeDB.scanTargets or _G.FrugalForgeDB.targets
     if type(t.targets) == "table" and #t.targets > 0 then
       recipeTargets = t.targets
     end
@@ -1058,7 +1085,7 @@ local function QueueItems()
           local reagents = r.reagents
           if type(reagents) == "table" then
             for _, itemId in ipairs(reagents) do
-              if type(itemId) == "number" and itemId > 0 then
+              if type(itemId) == "number" and itemId > 0 and IsScanQualityAllowed(itemId) then
                 itemSet[itemId] = true
               end
             end
@@ -1073,6 +1100,8 @@ local function QueueItems()
       table.sort(state.queue, function(a, b) return a < b end)
       if #state.queue > 0 then
         Print("Queued " .. tostring(#state.queue) .. " items from full target list.")
+        state.total = #state.queue
+        UpdateStatus()
         return
       end
 
@@ -1095,7 +1124,7 @@ local function QueueItems()
             local reagents = r.reagents
             if type(reagents) == "table" then
               for _, itemId in ipairs(reagents) do
-                if type(itemId) == "number" and itemId > 0 then
+                if type(itemId) == "number" and itemId > 0 and IsScanQualityAllowed(itemId) then
                   itemSet[itemId] = true
                 end
               end
@@ -1111,6 +1140,8 @@ local function QueueItems()
       table.sort(state.queue, function(a, b) return a < b end)
       if #state.queue > 0 then
         Print("Queued " .. tostring(#state.queue) .. " items for skill " .. tostring(skillLevel) .. " -> " .. tostring(upper) .. " (delta=" .. tostring(maxSkillDelta) .. ", cap=" .. tostring(cap) .. ").")
+        state.total = #state.queue
+        UpdateStatus()
         return
       end
 
@@ -1122,10 +1153,11 @@ local function QueueItems()
   if type(targets) ~= "table" then targets = {} end
 
   for _, itemId in ipairs(targets) do
-    if type(itemId) == "number" and itemId > 0 then
-      table.insert(state.queue, itemId)
-    end
+    TryQueue(itemId)
   end
+
+  state.total = #state.queue
+  UpdateStatus()
 
   if #state.queue == 0 then
     Print("Queued 0 items. Targets not loaded or empty. Use /frugal to build targets, then scan again.")
@@ -1271,6 +1303,7 @@ local function NextItem()
   state.page = 0
   state.awaiting = false
   state.timeoutRetries = 0
+  UpdateStatus()
   QueryCurrentPage()
 end
 
@@ -1422,10 +1455,12 @@ local function StartScan(queueOverride)
   if type(queueOverride) == "table" then
     state.queue = {}
     for _, itemId in ipairs(queueOverride) do
-      if type(itemId) == "number" and itemId > 0 then
+      if type(itemId) == "number" and itemId > 0 and IsScanQualityAllowed(itemId) then
         table.insert(state.queue, itemId)
       end
     end
+    state.total = #state.queue
+    UpdateStatus()
 
     if #state.queue == 0 then
       Print("No valid itemIds provided.")
@@ -1444,6 +1479,7 @@ local function StartScan(queueOverride)
 
   StartSnapshot()
   state.running = true
+  UpdateStatus()
   Print("Starting scan...")
   NextItem()
 end
@@ -1453,6 +1489,8 @@ local function StopScan()
   state.awaiting = false
   state.queue = {}
   state.currentItemId = nil
+  state.total = 0
+  UpdateStatus()
   Print("Stopped.")
 end
 
@@ -1499,7 +1537,6 @@ SlashCmdList["FRUGALSCAN"] = function(msg)
     Print("running=" .. tostring(state.running) ..
       ", remaining=" .. tostring(#state.queue) ..
       ", current=" .. tostring(state.currentItemId) ..
-      ", showPanelOnAuctionHouse=" .. tostring(GetSetting("showPanelOnAuctionHouse", true)) ..
       ", verboseDebug=" .. tostring(GetSetting("verboseDebug", false)))
     return
   end
@@ -1510,22 +1547,7 @@ SlashCmdList["FRUGALSCAN"] = function(msg)
   end
 
   if cmd == "panel" then
-    if FrugalScanPanel and FrugalScanPanel:IsShown() then
-      FrugalScanPanel:Hide()
-      Print("Panel hidden.")
-    else
-      if FrugalScanPanel then
-        FrugalScanPanel:ClearAllPoints()
-        local af = GetAuctionFrame()
-        if af then
-          FrugalScanPanel:SetPoint("TOPLEFT", af, "TOPRIGHT", 12, -80)
-        else
-          FrugalScanPanel:SetPoint("CENTER")
-        end
-        FrugalScanPanel:Show()
-      end
-      Print("Panel shown.")
-    end
+    Print("Scan panel removed. Use /frugal for controls.")
     return
   end
 
@@ -1560,7 +1582,6 @@ SlashCmdList["FRUGALSCAN"] = function(msg)
       ", minQueryIntervalSeconds=" .. tostring(GetSetting("minQueryIntervalSeconds", 3)) ..
       ", queryTimeoutSeconds=" .. tostring(GetSetting("queryTimeoutSeconds", 10)) ..
       ", maxTimeoutRetriesPerPage=" .. tostring(GetSetting("maxTimeoutRetriesPerPage", 3)) ..
-      ", showPanelOnAuctionHouse=" .. tostring(GetSetting("showPanelOnAuctionHouse", true)) ..
       ", verboseDebug=" .. tostring(GetSetting("verboseDebug", false)))
     Print("APIs: QueryAuctionItems=" .. tostring(QueryAuctionItems ~= nil) ..
       ", CanSendAuctionQuery=" .. tostring(CanSendAuctionQuery ~= nil) ..
@@ -1616,165 +1637,8 @@ SlashCmdList["FRUGALSCAN"] = function(msg)
     return
   end
 
-  Print("Commands: /frugalscan start | item <id|link> | stop | status | export | owned | owneddebug | options | panel | log | clearlog | debug | verbose")
+  Print("Commands: /frugalscan start | item <id|link> | stop | status | export | owned | owneddebug | options | log | clearlog | debug | verbose")
 end
-
--- Auction House panel UI
-local backdropTemplate = BackdropTemplateMixin and "BackdropTemplate" or nil
-local panel = CreateFrame("Frame", "FrugalScanPanel", UIParent, backdropTemplate)
-panel:SetSize(280, 230)
-panel:SetFrameStrata("DIALOG")
-panel:SetFrameLevel(1000)
-panel:SetClampedToScreen(true)
-panel:Hide()
-
-if panel.SetBackdrop then
-  panel:SetBackdrop({
-    bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
-    edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
-    tile = true, tileSize = 32, edgeSize = 32,
-    insets = { left = 8, right = 8, top = 8, bottom = 8 }
-  })
-end
-
-panel:SetMovable(true)
-panel:EnableMouse(true)
-panel:RegisterForDrag("LeftButton")
-panel:SetScript("OnDragStart", panel.StartMoving)
-panel:SetScript("OnDragStop", panel.StopMovingOrSizing)
-
-local panelTitle = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-panelTitle:SetPoint("TOPLEFT", 12, -12)
-panelTitle:SetText("FrugalScan")
-
-local panelClose = CreateFrame("Button", nil, panel, "UIPanelCloseButton")
-panelClose:SetPoint("TOPRIGHT", -4, -4)
-
-local statusText = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-statusText:SetPoint("TOPLEFT", 12, -36)
-statusText:SetWidth(256)
-statusText:SetJustifyH("LEFT")
-statusText:SetText("Ready.")
-
-local startBtn = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
-startBtn:SetPoint("TOPLEFT", 12, -62)
-startBtn:SetSize(68, 22)
-startBtn:SetText("Scan")
-startBtn:SetScript("OnClick", function() StartScan() end)
-
-local stopBtn = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
-stopBtn:SetPoint("LEFT", startBtn, "RIGHT", 8, 0)
-stopBtn:SetSize(68, 22)
-stopBtn:SetText("Stop")
-stopBtn:SetScript("OnClick", function() StopScan() end)
-
-local exportBtn = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
-exportBtn:SetPoint("LEFT", stopBtn, "RIGHT", 8, 0)
-exportBtn:SetSize(68, 22)
-exportBtn:SetText("Export")
-exportBtn:SetScript("OnClick", function() ShowExportFrame() end)
-
-local optionsBtn = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
-optionsBtn:SetPoint("TOPLEFT", 12, -92)
-optionsBtn:SetSize(102, 22)
-optionsBtn:SetText("Options")
-optionsBtn:SetScript("OnClick", function() OpenOptionsUi() end)
-
-local logBtn = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
-logBtn:SetPoint("LEFT", optionsBtn, "RIGHT", 8, 0)
-logBtn:SetSize(102, 22)
-logBtn:SetText("Log")
-logBtn:SetScript("OnClick", function()
-  local log = FrugalScanDB and FrugalScanDB.debugLog or {}
-  ShowExportFrame(table.concat(log or {}, "\n"), "FrugalScan Log")
-end)
-
-local ownedBtn = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
-ownedBtn:SetPoint("TOPLEFT", 12, -122)
-ownedBtn:SetSize(102, 22)
-ownedBtn:SetText("Owned")
-ownedBtn:SetScript("OnClick", function() ExportOwned() end)
-
-local function UpdatePanelStatus()
-  local current = state.currentItemId
-  local remaining = #state.queue
-  if state.running then
-    local canQuery = CanQuery()
-    local suffix = ""
-    if canQuery == false then
-      suffix = "\nWaiting: CanSendAuctionQuery=false"
-    end
-    statusText:SetText("Scanning...\nCurrent itemId: " .. tostring(current) .. "\nRemaining: " .. tostring(remaining) .. suffix)
-  else
-    local last = FrugalScanDB.lastSnapshot and FrugalScanDB.lastSnapshot.snapshotTimestampUtc or nil
-    local lastOwned = FrugalScanDB.lastOwnedSnapshot and FrugalScanDB.lastOwnedSnapshot.snapshotTimestampUtc or nil
-    if last then
-      local ownedLine = lastOwned and ("\nOwned: " .. tostring(lastOwned)) or ""
-      statusText:SetText("Ready.\nLast snapshot: " .. tostring(last) .. ownedLine)
-    else
-      statusText:SetText("Ready.\nNo snapshot yet.")
-    end
-  end
-
-  if state.running then
-    startBtn:Disable()
-    stopBtn:Enable()
-  else
-    startBtn:Enable()
-    stopBtn:Disable()
-  end
-end
-
-local elapsed = 0
-panel:SetScript("OnUpdate", function(_, dt)
-  elapsed = elapsed + (dt or 0)
-  if elapsed >= 0.5 then
-    elapsed = 0
-    UpdatePanelStatus()
-  end
-end)
-
-local function ShowPanelNearAuctionHouse()
-  if not panel then return end
-  panel:ClearAllPoints()
-  local af = GetAuctionFrame()
-  if af then
-    -- Keep away from the draggable header area to avoid interfering with moving the AH window.
-    panel:SetPoint("TOPLEFT", af, "TOPRIGHT", 12, -80)
-  else
-    panel:SetPoint("CENTER")
-  end
-  UpdatePanelStatus()
-  panel:Show()
-  DebugPrint("Panel shown.")
-end
-
-local function HidePanel()
-  if not panel then return end
-  panel:Hide()
-  DebugPrint("Panel hidden.")
-end
-
-local ahEventFrame = CreateFrame("Frame")
-ahEventFrame:RegisterEvent("AUCTION_HOUSE_SHOW")
-ahEventFrame:RegisterEvent("AUCTION_HOUSE_CLOSED")
-ahEventFrame:RegisterEvent("PLAYER_LOGIN")
-ahEventFrame:SetScript("OnEvent", function(_, event)
-  EnsureDb()
-  if event == "AUCTION_HOUSE_SHOW" then
-    if FrugalScanDB.settings.showPanelOnAuctionHouse then
-      C_Timer.After(0.1, ShowPanelNearAuctionHouse)
-    end
-  elseif event == "AUCTION_HOUSE_CLOSED" then
-    HidePanel()
-  elseif event == "PLAYER_LOGIN" then
-    TryRegisterOptions()
-    -- Fallback: if the AH is already open when the player logs in/reloads.
-    if FrugalScanDB.settings.showPanelOnAuctionHouse and IsAtAuctionHouse() then
-      C_Timer.After(0.1, ShowPanelNearAuctionHouse)
-    end
-  end
-end)
 
 -- Options UI (legacy Interface Options)
 local optionsParent = InterfaceOptionsFramePanelContainer or UIParent
@@ -1822,16 +1686,8 @@ optionsFrame:SetScript("OnShow", function(self)
   subtitle:SetPoint("TOPLEFT", 16, -40)
   subtitle:SetText("Configure the scan window used when FrugalScan_RecipeTargets is loaded.")
 
-  local showPanel = CreateFrame("CheckButton", "FrugalScanShowPanelCheckbox", self, "UICheckButtonTemplate")
-  showPanel:SetPoint("TOPLEFT", 16, -60)
-  showPanel.text:SetText("Show scan panel when Auction House opens")
-  showPanel:SetChecked(FrugalScanDB.settings.showPanelOnAuctionHouse)
-  showPanel:SetScript("OnClick", function(btn)
-    FrugalScanDB.settings.showPanelOnAuctionHouse = btn:GetChecked() and true or false
-  end)
-
   local verbose = CreateFrame("CheckButton", "FrugalScanVerboseCheckbox", self, "UICheckButtonTemplate")
-  verbose:SetPoint("TOPLEFT", 16, -82)
+  verbose:SetPoint("TOPLEFT", 16, -60)
   verbose.text:SetText("Verbose debug output")
   verbose:SetChecked(FrugalScanDB.settings.verboseDebug)
   verbose:SetScript("OnClick", function(btn)

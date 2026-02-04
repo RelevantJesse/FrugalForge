@@ -82,6 +82,21 @@ local function getItemName(itemId)
   return "item " .. tostring(itemId)
 end
 
+local QUALITY_COMMON = 1
+local QUALITY_UNCOMMON = 2
+
+local function getItemQuality(itemId)
+  if not itemId then return nil end
+  local _, _, quality = GetItemInfo(itemId)
+  return quality
+end
+
+local function isQualityAtMost(itemId, maxQuality)
+  local quality = getItemQuality(itemId)
+  if quality == nil then return true end
+  return quality <= maxQuality
+end
+
 local function log(msg)
   if not msg then return end
   DEFAULT_CHAT_FRAME:AddMessage("|cff7dd3fcFrugalForge|r: " .. tostring(msg))
@@ -94,6 +109,25 @@ end
 
 local ui = {}
 local buildTargetsForProfession
+
+local function updateScanStatus()
+  if not ui.scanValue then return end
+  local status = _G.FrugalScan_ScanStatus or _G.ProfessionLevelerScan_ScanStatus
+  if status and status.running then
+    local total = tonumber(status.total) or 0
+    local remaining = tonumber(status.remaining) or 0
+    local done = total - remaining
+    if total > 0 then
+      ui.scanValue:SetText(string.format("Scan: %d/%d (%d remaining)", done, total, remaining))
+    else
+      ui.scanValue:SetText("Scan: running...")
+    end
+  else
+    ui.scanValue:SetText("Scan: idle")
+  end
+end
+
+_G.FrugalForge_UpdateScanStatus = updateScanStatus
 local function buildTargetsFromUi()
   local selected = FrugalForgeDB.settings.selectedProfessionId
   if not selected and ui.profDrop then
@@ -115,6 +149,9 @@ local function buildTargetsFromUi()
   end
   local delta = tonumber(ui.deltaBox and ui.deltaBox:GetText() or "") or (FrugalForgeDB.settings.maxSkillDelta or 100)
   FrugalForgeDB.settings.maxSkillDelta = delta
+  if FrugalScanDB and FrugalScanDB.settings then
+    FrugalScanDB.settings.maxSkillDelta = delta
+  end
   FrugalForgeDB.lastBuildError = nil
   FrugalForgeDB.lastBuildMessage = "Build Targets clicked for id=" .. tostring(selected)
   log(FrugalForgeDB.lastBuildMessage)
@@ -151,7 +188,15 @@ local function buildTargetsFromUi()
     reagentIds = built.reagentIds,
   }
   FrugalForgeDB.targetsBuiltAt = ts()
-  local okApply, applyErr = applyTargetsSafe(built)
+  local prices = buildPriceMap()
+  local scanTargets = buildScanTargets(built, prices)
+  FrugalForgeDB.scanTargets = {
+    professionId = scanTargets.profession.professionId,
+    professionName = scanTargets.profession.name,
+    targets = scanTargets.targets,
+    reagentIds = scanTargets.reagentIds,
+  }
+  local okApply, applyErr = applyTargetsSafe(scanTargets)
   if not okApply then
     local msg = "Targets built, but failed to apply globals: " .. tostring(applyErr)
     FrugalForgeDB.lastBuildError = msg
@@ -309,29 +354,34 @@ buildTargetsForProfession = function(professionId, maxSkillDelta)
   local reagentIds = {}
   local seen = {}
 
-  for _, r in ipairs(prof.recipes or {}) do
-    local minSkill = r.minSkill or 0
-    local grayAt = r.grayAt or 0
-    if minSkill <= maxSkill and grayAt > currentSkill then
-      if type(r.reagents) == "table" and #r.reagents > 0 and type(r.reagents[1]) == "table" then
-        r.reagentsWithQty = r.reagents
-        local ids = {}
-        for _, reg in ipairs(r.reagents) do
+    for _, r in ipairs(prof.recipes or {}) do
+      local minSkill = r.minSkill or 0
+      local grayAt = r.grayAt or 0
+      if minSkill <= maxSkill and grayAt > currentSkill then
+        local outputItemId = tonumber(r.createsItemId or r.createsItem or r.createsId)
+        if outputItemId and not isQualityAtMost(outputItemId, QUALITY_UNCOMMON) then
+          goto continue
+        end
+        if type(r.reagents) == "table" and #r.reagents > 0 and type(r.reagents[1]) == "table" then
+          r.reagentsWithQty = r.reagents
+          local ids = {}
+          for _, reg in ipairs(r.reagents) do
+            local itemId = tonumber((type(reg) == "table" and (reg.itemId or reg.id or reg[1])) or reg)
+            if itemId then table.insert(ids, itemId) end
+          end
+          r.reagents = ids
+        end
+        table.insert(targets, r)
+        for _, reg in ipairs(r.reagents or {}) do
           local itemId = tonumber((type(reg) == "table" and (reg.itemId or reg.id or reg[1])) or reg)
-          if itemId then table.insert(ids, itemId) end
-        end
-        r.reagents = ids
-      end
-      table.insert(targets, r)
-      for _, reg in ipairs(r.reagents or {}) do
-        local itemId = tonumber((type(reg) == "table" and (reg.itemId or reg.id or reg[1])) or reg)
-        if itemId and not seen[itemId] then
-          seen[itemId] = true
-          table.insert(reagentIds, itemId)
+          if itemId and not seen[itemId] then
+            seen[itemId] = true
+            table.insert(reagentIds, itemId)
+          end
         end
       end
+      ::continue::
     end
-  end
 
   table.sort(targets, function(a, b)
     if a.minSkill == b.minSkill then return tostring(a.recipeId) < tostring(b.recipeId) end
@@ -361,6 +411,107 @@ local function buildRecipeByOutput(profession)
   end
   return map
 end
+
+local function buildPriceMap()
+  local snap = latestSnapshot()
+  local prices = {}
+  if snap and type(snap.prices) == "table" then
+    for _, p in ipairs(snap.prices) do
+      local itemId = tonumber(p.itemId)
+      if itemId and p.minUnitBuyoutCopper ~= nil then
+        prices[itemId] = p.minUnitBuyoutCopper
+      end
+    end
+  end
+  return prices
+end
+
+local function buildScanTargets(fullTargets, prices)
+  if not fullTargets or type(fullTargets.targets) ~= "table" then return fullTargets end
+  if not prices or next(prices) == nil then return fullTargets end
+
+  local perBand = FrugalForgeDB.settings.scanCheapestPerBand or 3
+  local bandSize = FrugalForgeDB.settings.scanBandSize or 5
+  local buckets = {}
+
+  local function getReagents(recipe)
+    if type(recipe.reagentsWithQty) == "table" and #recipe.reagentsWithQty > 0 then
+      return recipe.reagentsWithQty
+    end
+    if type(recipe.reagents) == "table" and #recipe.reagents > 0 and type(recipe.reagents[1]) == "table" then
+      return recipe.reagents
+    end
+    if type(recipe.reagents) == "table" then
+      local r = {}
+      for _, itemId in ipairs(recipe.reagents) do
+        table.insert(r, { itemId = itemId, qty = 1 })
+      end
+      return r
+    end
+    return nil
+  end
+
+  for _, r in ipairs(fullTargets.targets) do
+    if type(r) == "table" then
+      local reagents = getReagents(r)
+      if reagents then
+        local cost = 0
+        local missing = 0
+        for _, entry in ipairs(reagents) do
+          local itemId = tonumber(entry.itemId or entry.id or entry[1])
+          local qty = entry.qty or entry.quantity or 1
+          local price = prices[itemId]
+          if price then
+            cost = cost + price * qty
+          else
+            missing = missing + 1
+          end
+        end
+        local minSkill = r.minSkill or 0
+        local band = math.floor(minSkill / bandSize)
+        buckets[band] = buckets[band] or {}
+        table.insert(buckets[band], { recipe = r, cost = cost, missing = missing })
+      end
+    end
+  end
+
+  local selected = {}
+  for _, list in pairs(buckets) do
+    table.sort(list, function(a, b)
+      if a.missing == b.missing then return a.cost < b.cost end
+      return a.missing < b.missing
+    end)
+    for i = 1, math.min(perBand, #list) do
+      table.insert(selected, list[i].recipe)
+    end
+  end
+
+  if #selected < 5 then
+    return fullTargets
+  end
+
+  local reagentIds = {}
+  local seen = {}
+    for _, r in ipairs(selected) do
+      for _, reg in ipairs(r.reagents or {}) do
+        local itemId = tonumber((type(reg) == "table" and (reg.itemId or reg.id or reg[1])) or reg)
+        if itemId and not seen[itemId] and isQualityAtMost(itemId, QUALITY_COMMON) then
+          seen[itemId] = true
+          table.insert(reagentIds, itemId)
+        end
+      end
+    end
+  table.sort(reagentIds)
+
+  return {
+    profession = fullTargets.profession,
+    targets = selected,
+    reagentIds = reagentIds,
+    currentSkill = fullTargets.currentSkill,
+    maxSkill = fullTargets.maxSkill,
+  }
+end
+
 
 local function applyTargets(targets)
   ProfessionLevelerScan_TargetProfessionId = targets.profession.professionId
@@ -446,6 +597,7 @@ local function updateUi()
     ui.staleValue:SetText("")
   end
 
+  updateScanStatus()
 end
 
 local function buildMaps()
@@ -542,6 +694,12 @@ local function generatePlan()
   local snapProfession = snap and snap.targetProfessionName or nil
   local targetProfessionName = activeTargetProfession or snapProfession
   if activeTargetProfession and snapProfession and normalizeProfessionName(activeTargetProfession) ~= normalizeProfessionName(snapProfession) then
+    snap = nil
+    prices = {}
+    priceCount = 0
+    ownedMap, ownedCount, ownedByChar = {}, 0, {}
+  end
+  if activeTargetProfession and snapProfession and normalizeProfessionName(activeTargetProfession) ~= normalizeProfessionName(snapProfession) then
     debugLog("snapshot profession mismatch: snap=" .. tostring(snapProfession) .. " targets=" .. tostring(activeTargetProfession))
   end
   local known, rank, maxRank = hasProfession(targetProfessionName)
@@ -563,9 +721,9 @@ local function generatePlan()
   end
 
   local stepLines = {}
-  local stepCandidates = {}
   local shopping = {}
   local intermediatesAll = {}
+  local intermediatesFirstNeedSkill = {}
   local totalCost = 0
   local missingPriceItems = {}
   local reagentKinds = {}
@@ -580,6 +738,10 @@ local function generatePlan()
     if okSkill and rank then
       skillCap = rank + (FrugalForgeDB.settings.maxSkillDelta or 100)
     end
+  end
+
+  local function addIntermediate(intermediates, itemId, crafts)
+    intermediates[itemId] = (intermediates[itemId] or 0) + crafts
   end
 
   local function expandItem(itemId, qty, visited, leaf, intermediates)
@@ -600,7 +762,7 @@ local function generatePlan()
     local outputQty = recipe.createsQuantity or 1
     if outputQty <= 0 then outputQty = 1 end
     local crafts = math.ceil(qty / outputQty)
-    intermediates[itemId] = (intermediates[itemId] or 0) + crafts
+    addIntermediate(intermediates, itemId, crafts)
     visited[itemId] = true
     for _, reg in ipairs(recipe.reagents or {}) do
       local regId = tonumber(reg.itemId or reg.id or reg[1] or reg)
@@ -614,9 +776,27 @@ local function generatePlan()
   if targetProfessionName then
     currentSkill = select(1, getProfessionSkillByName(targetProfessionName))
   end
+  if not currentSkill then currentSkill = 1 end
+  local targetSkill = currentSkill + (FrugalForgeDB.settings.maxSkillDelta or 100)
 
+  local function chanceForSkill(skill, r)
+    local orange = r.orangeUntil or r.minSkill or 0
+    local yellow = r.yellowUntil or orange
+    local green = r.greenUntil or yellow
+    local gray = r.grayAt or green
+    if skill < orange then return 1 end
+    if skill < yellow then return 0.75 end
+    if skill < green then return 0.25 end
+    if skill < gray then return 0.1 end
+    return 0
+  end
+
+  local recipeInfos = {}
   for _, r in ipairs(recipes) do
     if type(r) == "table" then
+      if r.cooldownSeconds and r.cooldownSeconds > 0 then
+        -- skip cooldown recipes
+      else
       local reagents = nil
       if type(r.reagentsWithQty) == "table" and #r.reagentsWithQty > 0 then
         reagents = r.reagentsWithQty
@@ -628,139 +808,172 @@ local function generatePlan()
           table.insert(reagents, { itemId = itemId, qty = 1 })
         end
       end
+      if not reagents then
+        -- skip
+      else
 
-      if reagents then
-        local leaf = {}
-        local inter = {}
-        local visited = {}
-        for _, entry in ipairs(reagents) do
-          local itemId = tonumber(entry.itemId or entry.id or entry[1])
-          local qty = entry.qty or entry.quantity or 1
-          if itemId and qty and qty > 0 then
-            expandItem(itemId, qty, visited, leaf, inter)
-          end
-        end
-        for itemId, crafts in pairs(inter) do
-          intermediatesAll[itemId] = (intermediatesAll[itemId] or 0) + crafts
-        end
-        local stepCost = 0
-        local stepMissing = 0
-        for itemId, qty in pairs(leaf) do
-          if itemId and qty and qty > 0 then
-            local ownedQty = ownedMap[itemId] or 0
-            local buy = math.max(0, qty - ownedQty)
-            local price = prices[itemId]
-            if price then
-              pricedKinds[itemId] = true
-            else
-              if buy > 0 then
-                missingPriceItems[itemId] = true
-              end
-            end
-            if buy > 0 and price then
-              stepCost = stepCost + price * buy
-              shopping[itemId] = shopping[itemId] or { need = 0, owned = 0, price = price }
-              shopping[itemId].need = shopping[itemId].need + qty
-              shopping[itemId].owned = shopping[itemId].owned + ownedQty
-            elseif buy > 0 and not price then
-              stepMissing = stepMissing + 1
-              shopping[itemId] = shopping[itemId] or { need = 0, owned = 0, price = nil, missing = true }
-              shopping[itemId].need = shopping[itemId].need + qty
-              shopping[itemId].owned = shopping[itemId].owned + ownedQty
-            end
-            reagentKinds[itemId] = true
-          end
-        end
-
-        totalCost = totalCost + stepCost
-        local isIntermediate = r.createsItemId and intermediatesAll[r.createsItemId]
-        if not isIntermediate then
-          local startSkill = r.minSkill or 0
-          if currentSkill and startSkill < currentSkill then
-            startSkill = currentSkill
-          end
-          local grayAt = r.grayAt or ""
-          table.insert(stepCandidates, {
-            minSkill = startSkill,
-            grayAt = grayAt,
-            name = r.name or r.recipeId or "recipe",
-            cost = stepCost,
-            missing = stepMissing,
-            outputItemId = r.createsItemId,
-          })
+      local leaf = {}
+      local inter = {}
+      local visited = {}
+      for _, entry in ipairs(reagents) do
+        local itemId = tonumber(entry.itemId or entry.id or entry[1])
+        local qty = entry.qty or entry.quantity or 1
+        if itemId and qty and qty > 0 then
+          expandItem(itemId, qty, visited, leaf, inter)
         end
       end
+
+      local costPerCraft = 0
+      local missing = 0
+      for itemId, qty in pairs(leaf) do
+        local price = prices[itemId]
+        if price then
+          costPerCraft = costPerCraft + price * qty
+        else
+          missing = missing + 1
+        end
+      end
+
+      table.insert(recipeInfos, {
+        recipe = r,
+        minSkill = r.minSkill or 0,
+        grayAt = r.grayAt or (r.greenUntil or r.yellowUntil or r.minSkill or 0),
+        name = r.name or r.recipeId or "recipe",
+        outputItemId = r.createsItemId,
+        leaf = leaf,
+        inter = inter,
+        costPerCraft = costPerCraft,
+        missing = missing,
+      })
+      end
+    end
     end
   end
 
-  local bestByMin = {}
-  for _, s in ipairs(stepCandidates) do
-    local key = tostring(s.minSkill)
-    local existing = bestByMin[key]
-    if not existing then
-      bestByMin[key] = s
+  local chosenBySkill = {}
+  for skill = currentSkill, targetSkill - 1 do
+    local best = nil
+    for _, info in ipairs(recipeInfos) do
+      if skill >= info.minSkill and skill < info.grayAt then
+        local p = chanceForSkill(skill, info.recipe)
+        if p > 0 and info.missing == 0 then
+          local score = info.costPerCraft / p
+          if not best or score < best.score then
+            best = { info = info, score = score, p = p }
+          end
+        end
+      end
+    end
+    if not best then break end
+    chosenBySkill[skill] = best
+  end
+
+  local ranges = {}
+  local current = nil
+  for skill = currentSkill, targetSkill - 1 do
+    local choice = chosenBySkill[skill]
+    if not choice then break end
+    if not current or current.info ~= choice.info then
+      if current then table.insert(ranges, current) end
+      current = { info = choice.info, startSkill = skill, endSkill = skill, crafts = 0, expectedCost = 0 }
     else
-      if (s.missing or 0) < (existing.missing or 0) then
-        bestByMin[key] = s
-      elseif (s.missing or 0) == (existing.missing or 0) and (s.cost or 0) < (existing.cost or 0) then
-        bestByMin[key] = s
+      current.endSkill = skill
+    end
+    current.crafts = current.crafts + (1 / choice.p)
+    current.expectedCost = current.expectedCost + (choice.info.costPerCraft / choice.p)
+  end
+  if current then table.insert(ranges, current) end
+
+  local craftsByOutput = {}
+  for _, r in ipairs(ranges) do
+    local outputId = r.info.outputItemId
+    if outputId then
+      craftsByOutput[outputId] = (craftsByOutput[outputId] or 0) + r.crafts
+    end
+  end
+
+  local stepEntries = {}
+  for _, r in ipairs(ranges) do
+    local displayStart = r.startSkill
+    local displayEnd = r.endSkill + 1
+    local skillText = string.format(" (skill %d-%d)", displayStart, displayEnd)
+    table.insert(stepEntries, { skill = displayStart, text = string.format("- %s%s: cost %s",
+      r.info.name,
+      skillText,
+      copperToText(math.floor(r.expectedCost + 0.5))) })
+
+    for itemId, crafts in pairs(r.info.inter) do
+      intermediatesAll[itemId] = (intermediatesAll[itemId] or 0) + crafts * r.crafts
+      local needAt = intermediatesFirstNeedSkill[itemId]
+      if not needAt or r.startSkill < needAt then
+        intermediatesFirstNeedSkill[itemId] = r.startSkill
       end
     end
   end
 
-  local stepsOrdered = {}
-  for _, v in pairs(bestByMin) do table.insert(stepsOrdered, v) end
-  table.sort(stepsOrdered, function(a, b)
-    if a.minSkill == b.minSkill then return tostring(a.name) < tostring(b.name) end
-    return a.minSkill < b.minSkill
-  end)
+  local ownedRemaining = {}
+  for itemId, qty in pairs(ownedMap) do ownedRemaining[itemId] = qty end
 
-  local stepOutputs = {}
-  for _, s in ipairs(stepsOrdered) do
-    if s.outputItemId then
-      stepOutputs[s.outputItemId] = true
-    end
-  end
-
-  local mergedLines = {}
-  for _, s in ipairs(stepsOrdered) do
-    local skillText = string.format(" (skill %s-%s)", tostring(s.minSkill), tostring(s.grayAt))
-    table.insert(mergedLines, {
-      sortKey = s.minSkill or 0,
-      kind = "step",
-      text = string.format("- %s%s: cost %s%s",
-        s.name,
-        skillText,
-        copperToText(s.cost),
-        (s.missing and s.missing > 0) and string.format(" (missing prices x%d)", s.missing) or "")
-    })
-  end
-
-  if next(intermediatesAll) then
-    for itemId, crafts in pairs(intermediatesAll) do
-      if not stepOutputs[itemId] then
-        local recipe = recipeByOutput[itemId]
-        local minSkill = (recipe and recipe.minSkill) or 0
-        table.insert(mergedLines, {
-          sortKey = minSkill,
-          kind = "intermediate",
-          text = string.format("- %s (%d): craft %d", getItemName(itemId), itemId, crafts)
-        })
+  for _, r in ipairs(ranges) do
+    for itemId, qty in pairs(r.info.leaf) do
+      local need = qty * r.crafts
+      local ownedQty = ownedRemaining[itemId] or 0
+      local useOwned = math.min(need, ownedQty)
+      if useOwned > 0 then
+        ownedRemaining[itemId] = ownedQty - useOwned
       end
+      local buy = need - useOwned
+      if buy > 0 then
+        local price = prices[itemId]
+        if price then
+          pricedKinds[itemId] = true
+        else
+          missingPriceItems[itemId] = true
+        end
+        shopping[itemId] = shopping[itemId] or { need = 0, owned = 0, price = price }
+        shopping[itemId].need = shopping[itemId].need + need
+        shopping[itemId].owned = shopping[itemId].owned + useOwned
+      end
+      reagentKinds[itemId] = true
     end
+    totalCost = totalCost + r.expectedCost
   end
 
-  table.sort(mergedLines, function(a, b)
-    if a.sortKey == b.sortKey then
-      if a.kind == b.kind then return a.text < b.text end
-      return a.kind == "step"
+  local extraLines = {}
+  for itemId, crafts in pairs(intermediatesAll) do
+    local skillCrafts = craftsByOutput[itemId] or 0
+    local extra = crafts - skillCrafts
+    if extra > 0.01 then
+      local recipe = recipeByOutput[itemId]
+      local outputQty = (recipe and recipe.createsQuantity) or 1
+      if outputQty <= 0 then outputQty = 1 end
+      local qtyNeeded = math.ceil(extra * outputQty)
+      local needSkill = intermediatesFirstNeedSkill[itemId] or (recipe and recipe.minSkill) or 0
+      table.insert(extraLines, {
+        sortKey = needSkill,
+        text = string.format("- Craft until you have %d %s (%d)", qtyNeeded, getItemName(itemId), itemId)
+      })
     end
+  end
+  table.sort(extraLines, function(a, b)
+    if a.sortKey == b.sortKey then return a.text < b.text end
     return a.sortKey < b.sortKey
   end)
 
-  for _, line in ipairs(mergedLines) do
-    table.insert(stepLines, line.text)
+  local mergedSteps = {}
+  local iExtra = 1
+  for _, step in ipairs(stepEntries) do
+    while iExtra <= #extraLines and extraLines[iExtra].sortKey <= step.skill do
+      table.insert(mergedSteps, extraLines[iExtra].text)
+      iExtra = iExtra + 1
+    end
+    table.insert(mergedSteps, step.text)
   end
+  while iExtra <= #extraLines do
+    table.insert(mergedSteps, extraLines[iExtra].text)
+    iExtra = iExtra + 1
+  end
+  stepLines = mergedSteps
 
   local shoppingLines = { "Shopping list:" }
   local missingCount = 0
@@ -868,7 +1081,7 @@ local function createUi()
   if ui.frame then return end
 
   local f = CreateFrame("Frame", "FrugalForgeFrame", UIParent, "BasicFrameTemplateWithInset")
-  f:SetSize(740, 740)
+  f:SetSize(740, 720)
   f:SetPoint("CENTER")
   f:Hide()
   f:SetMovable(true)
@@ -895,6 +1108,7 @@ local function createUi()
     { "snapshotLabel", "Snapshot", "snapshotValue" },
     { "ownedLabel", "Owned", "ownedValue" },
     { "planLabel", "Plan", "planValue" },
+    { "scanLabel", "Scan", "scanValue" },
   }
 
   for _, row in ipairs(labels) do
@@ -915,7 +1129,7 @@ local function createUi()
   ui.profLabel:SetText("Profession:")
 
   ui.profDrop = CreateFrame("Frame", "FrugalForgeProfessionDropDown", f, "UIDropDownMenuTemplate")
-  ui.profDrop:SetPoint("TOPLEFT", 110, y - 10)
+  ui.profDrop:SetPoint("TOPLEFT", 110, y - 4)
 
   ui.deltaLabel = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
   ui.deltaLabel:SetPoint("TOPLEFT", 320, y - 4)
@@ -923,7 +1137,7 @@ local function createUi()
 
   ui.deltaBox = CreateFrame("EditBox", nil, f, "InputBoxTemplate")
   ui.deltaBox:SetSize(40, 20)
-  ui.deltaBox:SetPoint("TOPLEFT", 375, y - 8)
+  ui.deltaBox:SetPoint("TOPLEFT", 375, y - 2)
   ui.deltaBox:SetAutoFocus(false)
   ui.deltaBox:SetNumeric(true)
   ui.deltaBox:SetText(tostring(FrugalForgeDB.settings.maxSkillDelta or 100))
@@ -941,9 +1155,13 @@ local function createUi()
   ui.scanBtn:SetPoint("TOPLEFT", 16, y - 32)
   ui.scanBtn:SetText("Scan AH")
   ui.scanBtn:SetScript("OnClick", function()
-    if FrugalForgeDB.targets and type(FrugalForgeDB.targets.reagentIds) == "table" then
-      FrugalScan_TargetItemIds = FrugalForgeDB.targets.reagentIds
-      ProfessionLevelerScan_TargetItemIds = FrugalForgeDB.targets.reagentIds
+    if FrugalScanDB and FrugalScanDB.settings then
+      FrugalScanDB.settings.maxSkillDelta = FrugalForgeDB.settings.maxSkillDelta or 100
+    end
+    local scanTargets = FrugalForgeDB.scanTargets or FrugalForgeDB.targets
+    if scanTargets and type(scanTargets.reagentIds) == "table" then
+      FrugalScan_TargetItemIds = scanTargets.reagentIds
+      ProfessionLevelerScan_TargetItemIds = scanTargets.reagentIds
     end
     if type(SlashCmdList) == "table" and SlashCmdList["FRUGALSCAN"] then
       SlashCmdList["FRUGALSCAN"]("start")
@@ -957,9 +1175,20 @@ local function createUi()
   ui.scanMissingBtn:SetPoint("LEFT", ui.scanBtn, "RIGHT", 8, 0)
   ui.scanMissingBtn:SetText("Scan Missing")
   ui.scanMissingBtn:SetScript("OnClick", function()
-    local ids = FrugalForgeDB.lastPlan and FrugalForgeDB.lastPlan.missingPriceItemIds or nil
-    if type(ids) ~= "table" or #ids == 0 then
+    local missing = FrugalForgeDB.lastPlan and FrugalForgeDB.lastPlan.missingPriceItemIds or nil
+    if type(missing) ~= "table" or #missing == 0 then
       log("No missing-price items to scan. Generate a plan first.")
+      return
+    end
+    local ids = {}
+    for _, itemId in ipairs(missing) do
+      local n = tonumber(itemId)
+      if n and n > 0 and isQualityAtMost(n, QUALITY_COMMON) then
+        table.insert(ids, n)
+      end
+    end
+    if #ids == 0 then
+      log("No missing-price items to scan (filtered by rarity).")
       return
     end
     FrugalScan_TargetItemIds = ids
@@ -1041,7 +1270,7 @@ local function createUi()
   local stepsScroll = CreateFrame("ScrollFrame", nil, f, "UIPanelScrollFrameTemplate")
   stepsScroll:SetPoint("TOPLEFT", 16, y - 74)
   stepsScroll:SetPoint("RIGHT", -36, -8)
-  stepsScroll:SetHeight(200)
+  stepsScroll:SetHeight(180)
 
   local stepsBox = CreateFrame("EditBox", nil, stepsScroll)
   stepsBox:SetMultiLine(true)
@@ -1056,7 +1285,7 @@ local function createUi()
   local shopScroll = CreateFrame("ScrollFrame", nil, f, "UIPanelScrollFrameTemplate")
   shopScroll:SetPoint("TOPLEFT", stepsScroll, "BOTTOMLEFT", 0, -8)
   shopScroll:SetPoint("RIGHT", -36, -8)
-  shopScroll:SetHeight(200)
+  shopScroll:SetHeight(180)
 
   local shopBox = CreateFrame("EditBox", nil, shopScroll)
   shopBox:SetMultiLine(true)
@@ -1071,7 +1300,7 @@ local function createUi()
   local summaryScroll = CreateFrame("ScrollFrame", nil, f, "UIPanelScrollFrameTemplate")
   summaryScroll:SetPoint("TOPLEFT", shopScroll, "BOTTOMLEFT", 0, -8)
   summaryScroll:SetPoint("RIGHT", -36, -8)
-  summaryScroll:SetHeight(200)
+  summaryScroll:SetHeight(170)
 
   local summaryBox = CreateFrame("EditBox", nil, summaryScroll)
   summaryBox:SetMultiLine(true)

@@ -1,0 +1,127 @@
+name: Publish to CurseForge
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_type:
+        description: "releaseType: alpha | beta | release"
+        required: true
+        default: "beta"
+      changelog:
+        description: "Changelog (Markdown)"
+        required: false
+        default: ""
+  push:
+    tags:
+      - "v*"
+    paths:
+      - "addon/FrugalForge/FrugalForge.toc"
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Locate addon zip
+        id: zip
+        run: |
+          set -e
+          file=$(ls dist/FrugalForge-*.zip | sort -V | tail -n 1)
+          if [ -z "$file" ]; then
+            echo "No zip found in dist/" >&2
+            exit 1
+          fi
+          echo "file=$file" >> $GITHUB_OUTPUT
+          version=$(basename "$file" | sed -E 's/FrugalForge-([0-9.]+)\.zip/\1/')
+          echo "version=$version" >> $GITHUB_OUTPUT
+
+      - name: Resolve CurseForge TBC version IDs
+        id: cf_versions
+        run: |
+          set -e
+          game_id=$(curl -sS -H "x-api-key: ${CURSEFORGE_API_TOKEN}" \
+            https://api.curseforge.com/v1/games \
+            | jq -r '.data[] | select(.slug=="world-of-warcraft") | .id' | head -n 1)
+          if [ -z "$game_id" ] || [ "$game_id" = "null" ]; then
+            echo "Failed to resolve world-of-warcraft gameId" >&2
+            exit 1
+          fi
+
+          tbc_type_id=$(curl -sS -H "x-api-key: ${CURSEFORGE_API_TOKEN}" \
+            "https://api.curseforge.com/v1/games/${game_id}/version-types" \
+            | jq -r '.data[] | select((.name|ascii_downcase) | test("burning crusade")) | .id' | head -n 1)
+          if [ -z "$tbc_type_id" ] || [ "$tbc_type_id" = "null" ]; then
+            echo "Failed to resolve TBC version type id" >&2
+            exit 1
+          fi
+
+          tbc_versions=$(curl -sS -H "x-api-key: ${CURSEFORGE_API_TOKEN}" \
+            "https://api.curseforge.com/v2/games/${game_id}/versions" \
+            | jq -r --argjson type "$tbc_type_id" '.data[] | select(.type==$type) | .versions[] | .id' \
+            | paste -sd "," -)
+          if [ -z "$tbc_versions" ]; then
+            echo "Failed to resolve TBC gameVersion IDs" >&2
+            exit 1
+          fi
+
+          echo "game_id=$game_id" >> $GITHUB_OUTPUT
+          echo "tbc_type_id=$tbc_type_id" >> $GITHUB_OUTPUT
+          echo "tbc_versions=$tbc_versions" >> $GITHUB_OUTPUT
+        env:
+          CURSEFORGE_API_TOKEN: ${{ secrets.CURSEFORGE_API_TOKEN }}
+
+      - name: Build metadata
+        id: meta
+        run: |
+          python - <<'PY'
+          import json, os
+          release_type = os.environ.get("RELEASE_TYPE", "beta")
+          changelog = os.environ.get("CHANGELOG", "").strip()
+          version = os.environ.get("VERSION", "")
+          data = {
+              "changelog": changelog if changelog else f"Release {version}",
+              "changelogType": "markdown",
+              "displayName": f"FrugalForge {version}",
+              "releaseType": release_type,
+          }
+          game_version_type_id = os.environ.get("CURSEFORGE_GAME_VERSION_TYPE_ID")
+          if game_version_type_id:
+              try:
+                  data["gameVersionTypeId"] = int(game_version_type_id)
+              except ValueError:
+                  pass
+          game_versions_raw = os.environ.get("CURSEFORGE_GAME_VERSION_IDS") or ""
+          if game_versions_raw:
+              ids = []
+              for part in game_versions_raw.split(","):
+                  part = part.strip()
+                  if not part:
+                      continue
+                  try:
+                      ids.append(int(part))
+                  except ValueError:
+                      pass
+              if ids:
+                  data["gameVersions"] = ids
+          with open("cf-metadata.json", "w", encoding="utf-8") as f:
+              json.dump(data, f)
+          print("metadata:", data)
+          PY
+        env:
+          RELEASE_TYPE: ${{ github.event.inputs.release_type }}
+          CHANGELOG: ${{ github.event.inputs.changelog }}
+          VERSION: ${{ steps.zip.outputs.version }}
+          CURSEFORGE_GAME_VERSION_TYPE_ID: ${{ steps.cf_versions.outputs.tbc_type_id }}
+          CURSEFORGE_GAME_VERSION_IDS: ${{ steps.cf_versions.outputs.tbc_versions }}
+
+      - name: Upload to CurseForge
+        run: |
+          curl -sS -X POST "https://api.curseforge.com/v1/mods/${CURSEFORGE_PROJECT_ID}/files" \
+            -H "x-api-key: ${CURSEFORGE_API_TOKEN}" \
+            -F "metadata=@cf-metadata.json" \
+            -F "file=@${ZIP_FILE}"
+        env:
+          CURSEFORGE_API_TOKEN: ${{ secrets.CURSEFORGE_API_TOKEN }}
+          CURSEFORGE_PROJECT_ID: ${{ secrets.CURSEFORGE_PROJECT_ID }}
+          ZIP_FILE: ${{ steps.zip.outputs.file }}
