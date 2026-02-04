@@ -12,8 +12,8 @@ on:
         required: false
         default: ""
   push:
-    tags:
-      - "v*"
+    branches:
+      - "main"
     paths:
       - "FrugalForge/FrugalForge.toc"
 
