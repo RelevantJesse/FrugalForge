@@ -67,8 +67,8 @@ jobs:
         run: |
           set -e
           game_id=$(curl -sS -H "x-api-key: ${CURSEFORGE_API_TOKEN}" \
-            https://api.curseforge.com/v1/games \
-            | jq -r '.data[] | select(.slug=="world-of-warcraft") | .id' | head -n 1)
+            "https://api.curseforge.com/v1/mods/${CURSEFORGE_PROJECT_ID}" \
+            | jq -r '.data.gameId')
           if [ -z "$game_id" ] || [ "$game_id" = "null" ]; then
             echo "Failed to resolve world-of-warcraft gameId" >&2
             exit 1
@@ -96,6 +96,7 @@ jobs:
           echo "tbc_versions=$tbc_versions" >> $GITHUB_OUTPUT
         env:
           CURSEFORGE_API_TOKEN: ${{ secrets.CURSEFORGE_API_TOKEN }}
+          CURSEFORGE_PROJECT_ID: ${{ secrets.CURSEFORGE_PROJECT_ID }}
 
       - name: Build metadata
         id: meta
