@@ -70,35 +70,6 @@ jobs:
             echo "CURSEFORGE_API_TOKEN is not set" >&2
             exit 1
           fi
-          if [ -z "${CURSEFORGE_PROJECT_ID}" ]; then
-            echo "CURSEFORGE_PROJECT_ID is not set" >&2
-            exit 1
-          fi
-          tmpfile=$(mktemp)
-          status=$(curl -sS -H "X-Api-Token: ${CURSEFORGE_API_TOKEN}" \
-            -o "$tmpfile" -w "%{http_code}" \
-            "https://wow.curseforge.com/api/projects/${CURSEFORGE_PROJECT_ID}")
-          resp=$(cat "$tmpfile")
-          rm -f "$tmpfile"
-          echo "Project lookup status: $status"
-          game_id=$(echo "$resp" | jq -r '.gameID // .gameId // empty')
-          if [ -z "$game_id" ] || [ "$game_id" = "null" ]; then
-            echo "Project lookup failed, falling back to games list." >&2
-            status2=$(curl -sS -H "X-Api-Token: ${CURSEFORGE_API_TOKEN}" \
-              -o "$tmpfile" -w "%{http_code}" \
-              https://wow.curseforge.com/api/game/dependencies)
-            resp2=$(cat "$tmpfile")
-            rm -f "$tmpfile"
-            echo "Games list status: $status2"
-            game_id=$(echo "$resp2" | jq -r '.[] | select(.slug=="world-of-warcraft") | .id' | head -n 1)
-          fi
-          if [ -z "$game_id" ] || [ "$game_id" = "null" ]; then
-            echo "Failed to resolve world-of-warcraft gameId." >&2
-            echo "Project response (first 300 chars):" >&2
-            echo "$resp" | head -c 300 >&2
-            exit 1
-          fi
-
           tbc_type_id=$(curl -sS -H "X-Api-Token: ${CURSEFORGE_API_TOKEN}" \
             "https://wow.curseforge.com/api/game/versions" \
             | jq -r '.[] | select((.name|ascii_downcase) | test("burning crusade")) | .gameVersionTypeID' | head -n 1)
@@ -116,12 +87,10 @@ jobs:
             exit 1
           fi
 
-          echo "game_id=$game_id" >> $GITHUB_OUTPUT
           echo "tbc_type_id=$tbc_type_id" >> $GITHUB_OUTPUT
           echo "tbc_versions=$tbc_versions" >> $GITHUB_OUTPUT
         env:
           CURSEFORGE_API_TOKEN: ${{ secrets.CURSEFORGE_API_TOKEN }}
-          CURSEFORGE_PROJECT_ID: ${{ secrets.CURSEFORGE_PROJECT_ID }}
 
       - name: Build metadata
         id: meta
