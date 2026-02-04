@@ -75,22 +75,22 @@ jobs:
             exit 1
           fi
           tmpfile=$(mktemp)
-          status=$(curl -sS -H "x-api-key: ${CURSEFORGE_API_TOKEN}" \
+          status=$(curl -sS -H "X-Api-Token: ${CURSEFORGE_API_TOKEN}" \
             -o "$tmpfile" -w "%{http_code}" \
-            "https://api.curseforge.com/v1/mods/${CURSEFORGE_PROJECT_ID}")
+            "https://wow.curseforge.com/api/projects/${CURSEFORGE_PROJECT_ID}")
           resp=$(cat "$tmpfile")
           rm -f "$tmpfile"
           echo "Project lookup status: $status"
-          game_id=$(echo "$resp" | jq -r '.data.gameId')
+          game_id=$(echo "$resp" | jq -r '.gameID // .gameId // empty')
           if [ -z "$game_id" ] || [ "$game_id" = "null" ]; then
             echo "Project lookup failed, falling back to games list." >&2
-            status2=$(curl -sS -H "x-api-key: ${CURSEFORGE_API_TOKEN}" \
+            status2=$(curl -sS -H "X-Api-Token: ${CURSEFORGE_API_TOKEN}" \
               -o "$tmpfile" -w "%{http_code}" \
-              https://api.curseforge.com/v1/games)
+              https://wow.curseforge.com/api/game/dependencies)
             resp2=$(cat "$tmpfile")
             rm -f "$tmpfile"
             echo "Games list status: $status2"
-            game_id=$(echo "$resp2" | jq -r '.data[] | select(.slug=="world-of-warcraft") | .id' | head -n 1)
+            game_id=$(echo "$resp2" | jq -r '.[] | select(.slug=="world-of-warcraft") | .id' | head -n 1)
           fi
           if [ -z "$game_id" ] || [ "$game_id" = "null" ]; then
             echo "Failed to resolve world-of-warcraft gameId." >&2
@@ -99,17 +99,17 @@ jobs:
             exit 1
           fi
 
-          tbc_type_id=$(curl -sS -H "x-api-key: ${CURSEFORGE_API_TOKEN}" \
-            "https://api.curseforge.com/v1/games/${game_id}/version-types" \
-            | jq -r '.data[] | select((.name|ascii_downcase) | test("burning crusade")) | .id' | head -n 1)
+          tbc_type_id=$(curl -sS -H "X-Api-Token: ${CURSEFORGE_API_TOKEN}" \
+            "https://wow.curseforge.com/api/game/versions" \
+            | jq -r '.[] | select((.name|ascii_downcase) | test("burning crusade")) | .gameVersionTypeID' | head -n 1)
           if [ -z "$tbc_type_id" ] || [ "$tbc_type_id" = "null" ]; then
             echo "Failed to resolve TBC version type id" >&2
             exit 1
           fi
 
-          tbc_versions=$(curl -sS -H "x-api-key: ${CURSEFORGE_API_TOKEN}" \
-            "https://api.curseforge.com/v2/games/${game_id}/versions" \
-            | jq -r --argjson type "$tbc_type_id" '.data[] | select(.type==$type) | .versions[] | .id' \
+          tbc_versions=$(curl -sS -H "X-Api-Token: ${CURSEFORGE_API_TOKEN}" \
+            "https://wow.curseforge.com/api/game/versions" \
+            | jq -r --argjson type "$tbc_type_id" '.[] | select(.gameVersionTypeID==$type) | .id' \
             | paste -sd "," -)
           if [ -z "$tbc_versions" ]; then
             echo "Failed to resolve TBC gameVersion IDs" >&2
@@ -169,8 +169,8 @@ jobs:
 
       - name: Upload to CurseForge
         run: |
-          curl -sS -X POST "https://api.curseforge.com/v1/mods/${CURSEFORGE_PROJECT_ID}/files" \
-            -H "x-api-key: ${CURSEFORGE_API_TOKEN}" \
+          curl -sS -X POST "https://wow.curseforge.com/api/projects/${CURSEFORGE_PROJECT_ID}/upload-file" \
+            -H "X-Api-Token: ${CURSEFORGE_API_TOKEN}" \
             -F "metadata=@cf-metadata.json" \
             -F "file=@${ZIP_FILE}"
         env:
