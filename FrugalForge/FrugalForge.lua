@@ -1379,9 +1379,9 @@ local function generatePlan()
     local yellow = r.yellowUntil or orange
     local green = r.greenUntil or yellow
     local gray = r.grayAt or green
-    if skill < orange then return 1 end
-    if skill < yellow then return bandChance(skill, orange, yellow, 0.75, 0.35, 2.5) end
-    if skill < green then return bandChance(skill, yellow, green, 0.25, 0.10, 2.5) end
+    if skill <= orange then return 1 end
+    if skill <= yellow then return bandChance(skill, orange, yellow, 0.75, 0.35, 2.5) end
+    if skill <= green then return bandChance(skill, yellow, green, 0.25, 0.10, 2.5) end
     if skill < gray then return bandChance(skill, green, gray, 0.10, 0.03, 2.5) end
     return 0
   end
@@ -1406,6 +1406,30 @@ local function generatePlan()
       end
       if price then
         cost = cost + (price * buy) + (price * useOwned * ownedValueFactor)
+      else
+        missing = missing + 1
+      end
+    end
+    if info.requiresRecipe then
+      cost = cost * nonTrainerPenalty
+    end
+    return cost, missing
+  end
+
+  local function estimateCostForCraftsNoOwned(info, crafts)
+    local cost = 0
+    local missing = 0
+    if info.requiresRecipe then
+      missing = missing + 1
+    end
+    for itemId, qty in pairs(info.leaf) do
+      local need = qty * crafts
+      local price = prices[itemId]
+      if not price then
+        price = getVendorPrice(itemId)
+      end
+      if price then
+        cost = cost + (price * need)
       else
         missing = missing + 1
       end
@@ -1618,8 +1642,21 @@ local function generatePlan()
           if p > 0 then
             local crafts = 1 / p
             local cost, missing = estimateCostForCrafts(info, crafts, ownedRemainingSelection)
-            if not best or missing < best.missing or (missing == best.missing and cost < best.expectedCost) then
-              best = { info = info, p = p, crafts = crafts, expectedCost = cost, missing = missing }
+            local rawCost, rawMissing = estimateCostForCraftsNoOwned(info, crafts)
+            if not best
+              or missing < best.missing
+              or (missing == best.missing and cost < best.expectedCost)
+              or (missing == best.missing and cost == best.expectedCost and rawMissing < best.rawMissing)
+              or (missing == best.missing and cost == best.expectedCost and rawMissing == best.rawMissing and rawCost < best.rawCost) then
+              best = {
+                info = info,
+                p = p,
+                crafts = crafts,
+                expectedCost = cost,
+                missing = missing,
+                rawCost = rawCost,
+                rawMissing = rawMissing
+              }
             end
           end
         end
