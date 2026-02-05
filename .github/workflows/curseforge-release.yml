@@ -163,11 +163,11 @@ jobs:
       - name: Upload to CurseForge
         run: |
           resp=$(mktemp)
-          metadata=$(cat cf-metadata.json)
+          metadata=$(jq -c . cf-metadata.json)
           status=$(curl -sS -o "$resp" -w "%{http_code}" \
             -X POST "https://wow.curseforge.com/api/projects/${CURSEFORGE_PROJECT_ID}/upload-file" \
             -H "X-Api-Token: ${CURSEFORGE_API_TOKEN}" \
-            -F "metadata=${metadata};type=application/json" \
+            --form-string "metadata=${metadata}" \
             -F "file=@${ZIP_FILE}")
           echo "Upload status: $status"
           echo "Upload response:"

@@ -1,4 +1,4 @@
-## 1.2.0 - 2026-02-05
+## 1.1.2 - 2026-02-05
 
 - Selection tie-breaker now falls back to “no-owned” reagent cost when expected costs are equal, avoiding pricey recipes when owned mats zero out cost.
 - Orange recipes remain 1.0 skill-up chance through the orange cutoff; decay starts at yellow.
