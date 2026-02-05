@@ -1,6 +1,12 @@
+## 1.1.1 - 2026-02-05
+
+- Skill-up chance now decays progressively within yellow/green/pre-gray bands instead of flat rates.
+- Minimap button is smaller, draggable, and can be hidden via Alt-click or `/frugal minimap` (tooltip updated).
+
 ## 1.1.0 - 2026-02-04
 
 - Fix intermediate handling so owned base mats satisfy intermediate crafts (e.g., owned Runecloth now correctly reduces Bolt of Runecloth purchases by preferring craft when fully satisfiable from owned).
+- Fix shopping list base-mat quantities when owned intermediate outputs cover part of intermediate demand (don’t expand owned bolts/settings/etc into their base reagents).
 - Fix Build Targets crash caused by `buildRecipeByOutput` being nil (Lua forward-declare scoping issue).
 - Shopping list now accounts for owned quantities when an item appears both as a purchased mat and as an intermediate to craft (owned reduces crafts after covering buy-needed; "need" reflects total buy+craft demand).
 - Scanner cleanup: remove legacy `ProfessionLevelerScan*` bridge globals, clamp scan delay (faster by default), filter vendor/quality-disallowed items, and de-dupe/sanitize scan target IDs.

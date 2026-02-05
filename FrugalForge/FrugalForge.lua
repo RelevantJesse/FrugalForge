@@ -99,6 +99,7 @@ local function ensureDb()
     ownedValueFactor = 0.9,
     devMode = false,
     minimapAngle = 45,
+    minimapHidden = false,
     includeNonTrainerRecipes = true,
   }
   FrugalForgeDB.lastPlan = FrugalForgeDB.lastPlan or nil
@@ -1357,15 +1358,31 @@ local function generatePlan()
   if not currentSkill then currentSkill = 1 end
   local targetSkill = FrugalForgeDB.settings.targetSkill or (currentSkill + 100)
 
+  local function clamp01(x)
+    if x < 0 then return 0 end
+    if x > 1 then return 1 end
+    return x
+  end
+
+  local function lerp(a, b, t)
+    return a + (b - a) * t
+  end
+
+  local function bandChance(skill, bandStart, bandEnd, hi, lo, gamma)
+    if bandEnd <= bandStart then return lo end
+    local t = clamp01((skill - bandStart) / (bandEnd - bandStart))
+    return lerp(hi, lo, t ^ gamma)
+  end
+
   local function chanceForSkill(skill, r)
     local orange = r.orangeUntil or r.minSkill or 0
     local yellow = r.yellowUntil or orange
     local green = r.greenUntil or yellow
     local gray = r.grayAt or green
     if skill < orange then return 1 end
-    if skill < yellow then return 0.68 end
-    if skill < green then return 0.2 end
-    if skill < gray then return 0.1 end
+    if skill < yellow then return bandChance(skill, orange, yellow, 0.75, 0.35, 2.5) end
+    if skill < green then return bandChance(skill, yellow, green, 0.25, 0.10, 2.5) end
+    if skill < gray then return bandChance(skill, green, gray, 0.10, 0.03, 2.5) end
     return 0
   end
 
@@ -1629,17 +1646,25 @@ local function generatePlan()
   end
   if current then table.insert(ranges, current) end
 
+  -- Convert expected crafts (fractional) into a deterministic whole-craft plan for
+  -- reagent expansion and shopping list accounting.
+  for _, r in ipairs(ranges) do
+    local n = math.ceil(tonumber(r.crafts or 0) or 0)
+    if n < 0 then n = 0 end
+    r.craftCount = n
+  end
+
   local craftsByOutput = {}
   for _, r in ipairs(ranges) do
     local outputId = r.info.outputItemId
     if outputId then
-      craftsByOutput[outputId] = (craftsByOutput[outputId] or 0) + r.crafts
+      craftsByOutput[outputId] = (craftsByOutput[outputId] or 0) + (r.craftCount or 0)
     end
   end
 
   for _, r in ipairs(ranges) do
     for itemId, crafts in pairs(r.info.inter) do
-      intermediatesAll[itemId] = (intermediatesAll[itemId] or 0) + crafts * r.crafts
+      intermediatesAll[itemId] = (intermediatesAll[itemId] or 0) + crafts * (r.craftCount or 0)
       local needAt = intermediatesFirstNeedSkill[itemId]
       if not needAt or r.startSkill < needAt then
         intermediatesFirstNeedSkill[itemId] = r.startSkill
@@ -1654,14 +1679,14 @@ local function generatePlan()
     local displayStart = r.startSkill
     local displayEnd = r.endSkill + 1
     local skillText = string.format(" (skill %d-%d)", displayStart, displayEnd)
-    local craftCount = math.ceil(r.crafts or 0)
+    local craftCount = r.craftCount or math.ceil(r.crafts or 0)
     local rangeCost = 0
     local rangeMissing = 0
     if r.info.requiresRecipe then
       recipeNeeds[r.info.recipe.recipeId or r.info.name or "recipe"] = r.info
     end
     for itemId, qty in pairs(r.info.leaf) do
-      local need = qty * r.crafts
+      local need = qty * craftCount
       local ownedQty = ownedForSteps[itemId] or 0
       local useOwned = math.min(need, ownedQty)
       if useOwned > 0 then
@@ -1696,8 +1721,9 @@ local function generatePlan()
   local ownedRemaining = {}
 
   for _, r in ipairs(ranges) do
+    local craftCount = r.craftCount or math.ceil(r.crafts or 0)
     for itemId, qty in pairs(r.info.leaf) do
-      local need = qty * r.crafts
+      local need = qty * craftCount
       if ownedRemaining[itemId] == nil then
         ownedRemaining[itemId] = getOwnedCount(itemId, "shopping")
       end
@@ -1773,6 +1799,98 @@ local function generatePlan()
     materials[itemId].craft = (materials[itemId].craft or 0) + craftQty
   end
 
+  -- Intermediate accounting correction:
+  -- We expand intermediates into base mats assuming we craft the full intermediate requirement.
+  -- If the player already owns some intermediate outputs, those owned units should not be expanded
+  -- into base mats. This pass subtracts the base-mat needs corresponding to the owned portion of
+  -- intermediate demand and also precomputes net-craft quantities for display.
+  local ownedLiveByItem = {}
+  local netCraftByItem = {}
+
+  local function chooseCraftOption(itemId)
+    local craftCost, craftMissing, craftOption = computeBestCraftUnitCost(itemId, {}, nil)
+    if craftMissing and craftMissing > 0 then
+      craftOption = craftOption -- keep deterministic fallback below
+    end
+    if craftCost == nil then
+      craftOption = craftOption -- may still be nil
+    end
+
+    local chosen = craftOption
+    if not chosen then
+      local craftOptions = getCraftOptions(itemId)
+      if craftOptions and #craftOptions > 0 then
+        for _, opt in ipairs(craftOptions) do
+          if opt and opt.type == "recipe" then
+            chosen = opt
+            break
+          end
+        end
+        if not chosen then
+          chosen = craftOptions[1]
+        end
+      end
+    end
+    return chosen
+  end
+
+  local function expandCraftedUnitsToLeaf(itemId, qtyUnits, leafOut, visited)
+    if not itemId or qtyUnits <= 0 then return end
+    if visited[itemId] then
+      -- Cycle safeguard: treat as leaf.
+      leafOut[itemId] = (leafOut[itemId] or 0) + qtyUnits
+      return
+    end
+
+    local chosen = chooseCraftOption(itemId)
+    if not chosen then
+      leafOut[itemId] = (leafOut[itemId] or 0) + qtyUnits
+      return
+    end
+
+    local outQty = chosen.outputQty or 1
+    if outQty <= 0 then outQty = 1 end
+    local crafts = math.ceil(qtyUnits / outQty)
+
+    visited[itemId] = true
+    local dummyInter = {}
+    for _, reg in ipairs(chosen.reagents or {}) do
+      local regId
+      local regQty = 1
+      if type(reg) == "table" then
+        regId = tonumber(reg.itemId or reg.id or reg[1])
+        regQty = reg.qty or reg.quantity or 1
+      else
+        regId = tonumber(reg)
+      end
+      expandItem(regId, regQty * crafts, visited, leafOut, dummyInter)
+    end
+    visited[itemId] = nil
+  end
+
+  for itemId, entry in pairs(materials) do
+    local ownedLive = getOwnedCount(itemId, "shopping")
+    ownedLiveByItem[itemId] = ownedLive
+
+    local needBuy = entry.need or 0
+    local needCraft = entry.craft or 0
+
+    local ownedForBuyNeed = math.min(needBuy, ownedLive)
+    local ownedAfterBuyNeed = ownedLive - ownedForBuyNeed
+    local ownedUsedForCraft = math.min(needCraft, ownedAfterBuyNeed)
+    netCraftByItem[itemId] = math.max(0, needCraft - ownedUsedForCraft)
+
+    if ownedUsedForCraft > 0 and needCraft > 0 then
+      local leafDelta = {}
+      expandCraftedUnitsToLeaf(itemId, ownedUsedForCraft, leafDelta, {})
+      for leafId, leafQty in pairs(leafDelta) do
+        if materials[leafId] then
+          materials[leafId].need = math.max(0, (materials[leafId].need or 0) - leafQty)
+        end
+      end
+    end
+  end
+
   local shoppingLines = { "Materials list:" }
   local missingCount = 0
   local shoppingList = {}
@@ -1782,18 +1900,24 @@ local function generatePlan()
   table.sort(shoppingList, function(a, b)
     return tostring(getItemName(a.itemId)) < tostring(getItemName(b.itemId))
   end)
+
+  local recomputedTotalCost = 0
   for _, row in ipairs(shoppingList) do
     local itemId = row.itemId
     local entry = row.entry
-    local ownedLive = getOwnedCount(itemId, "shopping")
+    local ownedLive = ownedLiveByItem[itemId]
+    if ownedLive == nil then
+      ownedLive = getOwnedCount(itemId, "shopping")
+      ownedLiveByItem[itemId] = ownedLive
+    end
     local needBuy = entry.need or 0
     local needCraft = entry.craft or 0
+    local netCraft = netCraftByItem[itemId] or 0
 
     -- Owned allocation: satisfy "buy-needed" usage first, then use remaining owned to reduce crafts.
     local ownedForBuyNeed = math.min(needBuy, ownedLive)
-    local ownedAfterBuyNeed = ownedLive - ownedForBuyNeed
     local buy = math.max(0, needBuy - ownedForBuyNeed)
-    local craft = math.max(0, needCraft - ownedAfterBuyNeed)
+    local craft = netCraft
     local totalNeed = needBuy + needCraft
 
     local ownedBreakdown = ""
@@ -1818,7 +1942,12 @@ local function generatePlan()
     local line = string.format("  - %s (%d): need %d (owned %d%s)%s, buy %d @ %s = %s%s%s",
       getItemName(itemId), itemId, totalNeed, ownedLive, ownedBreakdown, craftText, buy, priceText, totalText, missingTag, vendorTag)
     table.insert(shoppingLines, line)
+
+    if entry.price then
+      recomputedTotalCost = recomputedTotalCost + (entry.price * buy)
+    end
   end
+  totalCost = recomputedTotalCost
   for _, info in pairs(recipeNeeds) do
     table.insert(recipeNeedList, info)
   end
@@ -2346,12 +2475,13 @@ local function toggleUi()
 end
 
 
+local setMinimapButtonHidden
 local function createMinimapButton()
   if ui.minimapBtn or not Minimap then return end
   ensureDb()
 
   local btn = CreateFrame("Button", "FrugalForgeMinimapButton", Minimap)
-  btn:SetSize(32, 32)
+  btn:SetSize(24, 24)
   btn:SetFrameStrata("MEDIUM")
   btn:SetFrameLevel(8)
   btn:RegisterForClicks("LeftButtonUp", "RightButtonUp")
@@ -2365,16 +2495,28 @@ local function createMinimapButton()
   btn:SetHighlightTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight")
 
   local function position()
-    local angle = (FrugalForgeDB.settings and FrugalForgeDB.settings.minimapAngle) or 45
+    local settings = FrugalForgeDB.settings or {}
+    if settings.minimapOffsetX ~= nil and settings.minimapOffsetY ~= nil then
+      btn:ClearAllPoints()
+      btn:SetPoint("CENTER", Minimap, "CENTER", settings.minimapOffsetX, settings.minimapOffsetY)
+      return
+    end
+    local angle = settings.minimapAngle or 45
     local rad = (math.rad and math.rad(angle)) or (angle * math.pi / 180)
     local radius = 80
     local x = math.cos(rad) * radius
     local y = math.sin(rad) * radius
+    btn:ClearAllPoints()
     btn:SetPoint("CENTER", Minimap, "CENTER", x, y)
   end
 
   btn:SetScript("OnClick", function(_, button)
     if button == "RightButton" then
+      return
+    end
+    if IsAltKeyDown and IsAltKeyDown() then
+      setMinimapButtonHidden(true)
+      DEFAULT_CHAT_FRAME:AddMessage("|cff7dd3fcFrugalForge|r: Minimap button hidden. Use /frugal minimap to show.")
       return
     end
     if IsControlKeyDown and IsControlKeyDown() then
@@ -2395,6 +2537,10 @@ local function createMinimapButton()
     GameTooltip:AddLine("Open FrugalForge window", 1, 1, 1, false)
     GameTooltip:AddLine("Ctrl click:", 0.7, 0.7, 0.7, false)
     GameTooltip:AddLine("Start AH scan for current targets", 1, 1, 1, false)
+    GameTooltip:AddLine("Alt click:", 0.7, 0.7, 0.7, false)
+    GameTooltip:AddLine("Hide minimap button (/frugal minimap to show)", 1, 1, 1, false)
+    GameTooltip:AddLine("Drag:", 0.7, 0.7, 0.7, false)
+    GameTooltip:AddLine("Move minimap button", 1, 1, 1, false)
     GameTooltip:Show()
   end)
 
@@ -2409,9 +2555,8 @@ local function createMinimapButton()
       local scale = UIParent:GetScale()
       mx, my = mx / scale, my / scale
       local dx, dy = mx - cx, my - cy
-      local angle = (math.atan2 and math.atan2(dy, dx)) or math.atan(dy, dx)
-      local deg = angle * (180 / math.pi)
-      FrugalForgeDB.settings.minimapAngle = deg
+      FrugalForgeDB.settings.minimapOffsetX = dx
+      FrugalForgeDB.settings.minimapOffsetY = dy
       position()
     end)
   end)
@@ -2422,6 +2567,23 @@ local function createMinimapButton()
 
   position()
   ui.minimapBtn = btn
+  if FrugalForgeDB.settings and FrugalForgeDB.settings.minimapHidden then
+    btn:Hide()
+  end
+end
+
+setMinimapButtonHidden = function(hidden)
+  ensureDb()
+  FrugalForgeDB.settings.minimapHidden = hidden and true or false
+  if hidden then
+    if ui.minimapBtn then ui.minimapBtn:Hide() end
+  else
+    if not ui.minimapBtn then
+      createMinimapButton()
+    else
+      ui.minimapBtn:Show()
+    end
+  end
 end
 
 SLASH_FRUGALFORGE1 = "/frugal"
@@ -2491,6 +2653,17 @@ SlashCmdList["FRUGALFORGE"] = function(msg)
       end
     end
     DEFAULT_CHAT_FRAME:AddMessage("|cff7dd3fcFrugalForge|r: Dev mode = " .. tostring(FrugalForgeDB.settings.devMode))
+    return
+  end
+  if cmd == "minimap" or cmd == "minimapbutton" then
+    ensureDb()
+    local hidden = not (FrugalForgeDB.settings and FrugalForgeDB.settings.minimapHidden)
+    setMinimapButtonHidden(hidden)
+    if hidden then
+      DEFAULT_CHAT_FRAME:AddMessage("|cff7dd3fcFrugalForge|r: Minimap button hidden. Use /frugal minimap to show.")
+    else
+      DEFAULT_CHAT_FRAME:AddMessage("|cff7dd3fcFrugalForge|r: Minimap button shown.")
+    end
     return
   end
   if cmd == "build" then
