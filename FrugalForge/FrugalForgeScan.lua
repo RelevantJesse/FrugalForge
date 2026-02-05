@@ -1,34 +1,11 @@
 local ADDON_NAME = ...
-local OPTIONS_FRAME_NAME = "ProfessionLevelerScanOptionsFrame"
-
-local function BridgeSavedVariables()
-  ProfessionLevelerScanDB = ProfessionLevelerScanDB or FrugalScanDB
-  FrugalScanDB = ProfessionLevelerScanDB or {}
-
-  local function bridge(name)
-    local newName = "ProfessionLevelerScan_" .. name
-    local oldName = "FrugalScan_" .. name
-    if _G[newName] == nil then _G[newName] = _G[oldName] end
-    if _G[oldName] == nil then _G[oldName] = _G[newName] end
-  end
-
-  bridge("TargetItemIds")
-  bridge("TargetGameVersion")
-  bridge("TargetRegion")
-  bridge("TargetRealmSlug")
-  bridge("TargetProfessionId")
-  bridge("TargetProfessionName")
-  bridge("VendorItemIds")
-  bridge("RecipeTargets")
-  bridge("OwnedItemIds")
-end
-
-BridgeSavedVariables()
+local OPTIONS_FRAME_NAME = "FrugalScanOptionsFrame"
 
 local function EnsureDb()
   if type(FrugalScanDB) ~= "table" then
     FrugalScanDB = {}
   end
+  _G.ProfessionLevelerScanDB = nil
   if type(FrugalScanDB.settings) ~= "table" then
     FrugalScanDB.settings = {}
   end
@@ -40,7 +17,9 @@ local function EnsureDb()
   if type(s.maxSkillDelta) ~= "number" then s.maxSkillDelta = 100 end
   if type(s.expansionCapSkill) ~= "number" then s.expansionCapSkill = 350 end
   if type(s.maxPagesPerItem) ~= "number" then s.maxPagesPerItem = 10 end
-  if type(s.minQueryIntervalSeconds) ~= "number" then s.minQueryIntervalSeconds = 3 end
+  if type(s.minQueryIntervalSeconds) ~= "number" then s.minQueryIntervalSeconds = 1.5 end
+  if s.minQueryIntervalSeconds > 1.5 then s.minQueryIntervalSeconds = 1.5 end
+  if s.minQueryIntervalSeconds < 0.5 then s.minQueryIntervalSeconds = 0.5 end
   if type(s.queryTimeoutSeconds) ~= "number" then s.queryTimeoutSeconds = 10 end
   if type(s.maxTimeoutRetriesPerPage) ~= "number" then s.maxTimeoutRetriesPerPage = 3 end
   if type(s.priceRank) ~= "number" then s.priceRank = 3 end
@@ -146,7 +125,7 @@ local state = {
   currentQueryName = nil,
   page = 0,
   maxPages = 10,
-  delaySeconds = 2.0,
+  delaySeconds = 1.5,
   awaiting = false,
   prices = {},
   foundAnyForItem = false,
@@ -215,6 +194,60 @@ local function IsScanQualityAllowed(itemId)
   if quality == nil then return true end
   return quality <= QUALITY_UNCOMMON
 end
+
+local VENDOR_PRICE_BY_ID = _G.FrugalForgeVendorPrices or {}
+local FALLBACK_VENDOR_IDS = {
+  [2324] = true, -- Bleach
+  [2325] = true, -- Black Dye
+  [2604] = true, -- Red Dye
+  [2605] = true, -- Green Dye
+  [6260] = true, -- Blue Dye
+  [6261] = true, -- Orange Dye
+  [4342] = true, -- Purple Dye
+  [10290] = true, -- Pink Dye
+  [2320] = true, -- Coarse Thread
+  [2321] = true, -- Fine Thread
+  [159] = true, -- Refreshing Spring Water
+  [2880] = true, -- Weak Flux
+  [4399] = true, -- Wooden Stock
+  [4400] = true, -- Heavy Stock
+  [4291] = true, -- Silken Thread
+  [8343] = true, -- Heavy Silken Thread
+  [14341] = true, -- Rune Thread
+  [18240] = true, -- Ogre Tannin
+}
+local EXTRA_VENDOR_ITEM_IDS = {
+  [9210] = true, -- Ghost Dye (not present in vendor price table)
+}
+local function IsVendorItem(itemId)
+  if not itemId then return false end
+  if VENDOR_PRICE_BY_ID[itemId] ~= nil then return true end
+  if EXTRA_VENDOR_ITEM_IDS[itemId] == true then return true end
+  return FALLBACK_VENDOR_IDS[itemId] == true
+end
+
+local function SanitizeTargetIds()
+  local function sanitize(list)
+    if type(list) ~= "table" then return list end
+    local out = {}
+    local seen = {}
+    for _, itemId in ipairs(list) do
+      local n = tonumber(itemId)
+      if n and n > 0 and not IsVendorItem(n) and IsScanQualityAllowed(n) and not seen[n] then
+        seen[n] = true
+        table.insert(out, n)
+      end
+    end
+    table.sort(out)
+    return out
+  end
+
+  if type(_G.FrugalScan_TargetItemIds) == "table" then
+    _G.FrugalScan_TargetItemIds = sanitize(_G.FrugalScan_TargetItemIds)
+  end
+end
+
+SanitizeTargetIds()
 
 local function ExtractAuctionRow(listType, index)
   local fields = { GetAuctionItemInfo(listType, index) }
@@ -384,6 +417,17 @@ end
 
 local function StartSnapshot()
   state.prices = {}
+  if state.mergeWithLast == true and FrugalScanDB and type(FrugalScanDB.lastSnapshot) == "table" and type(FrugalScanDB.lastSnapshot.prices) == "table" then
+    for _, p in ipairs(FrugalScanDB.lastSnapshot.prices) do
+      if p and p.itemId then
+        state.prices[p.itemId] = {
+          bestUnits = { p.minUnitBuyoutCopper },
+          minUnitBuyoutCopper = p.minUnitBuyoutCopper,
+          totalQuantity = p.totalQuantity,
+        }
+      end
+    end
+  end
   state.startedAt = time()
   state.lastQueryAt = nil
   state.lastQueryToken = 0
@@ -452,8 +496,7 @@ local function BuildExportJsonFromSnapshot(snap)
 end
 
 local function FinishSnapshot()
-  local rank = tonumber(GetSetting("priceRank", 3)) or 3
-  if rank < 1 then rank = 1 end
+  local rank = 3
 
   local realmName = GetRealmName()
   local realmSlug = NormalizeRealmSlug(realmName)
@@ -491,7 +534,7 @@ local function FinishSnapshot()
   table.sort(snapshot.prices, function(a, b) return a.itemId < b.itemId end)
 
   if state.mergeWithLast == true then
-    local base = (FrugalScanDB and FrugalScanDB.lastSnapshot) or (ProfessionLevelerScanDB and ProfessionLevelerScanDB.lastSnapshot) or nil
+  local base = (FrugalScanDB and FrugalScanDB.lastSnapshot) or nil
     if base and type(base.prices) == "table" then
       local merged = {}
       for _, p in ipairs(base.prices) do
@@ -511,7 +554,7 @@ local function FinishSnapshot()
       table.sort(snapshot.prices, function(a, b) return a.itemId < b.itemId end)
     end
   end
-  state.mergeWithLast = false
+  state.mergeWithLast = true
 
   FrugalScanDB.lastSnapshot = snapshot
   FrugalScanDB.lastSnapshotJson = BuildExportJsonFromSnapshot(snapshot)
@@ -614,16 +657,6 @@ local function BuildWantedItemIdSet()
             count = count + 1
           end
         end
-      end
-    end
-  end
-
-  if type(FrugalScan_VendorItemIds) == "table" then
-    for _, itemId in ipairs(FrugalScan_VendorItemIds) do
-      local n = tonumber(itemId)
-      if n and n > 0 and not wanted[n] then
-        wanted[n] = true
-        count = count + 1
       end
     end
   end
@@ -972,8 +1005,20 @@ end
 
 local function QueueItems()
   state.queue = {}
+  local function FilterQueue()
+    if #state.queue == 0 then return end
+    local filtered = {}
+    local seen = {}
+    for _, itemId in ipairs(state.queue) do
+      if type(itemId) == "number" and itemId > 0 and IsScanQualityAllowed(itemId) and not IsVendorItem(itemId) and not seen[itemId] then
+        seen[itemId] = true
+        table.insert(filtered, itemId)
+      end
+    end
+    state.queue = filtered
+  end
   local function TryQueue(itemId)
-    if type(itemId) == "number" and itemId > 0 and IsScanQualityAllowed(itemId) then
+    if type(itemId) == "number" and itemId > 0 and IsScanQualityAllowed(itemId) and not IsVendorItem(itemId) then
       table.insert(state.queue, itemId)
     end
   end
@@ -981,7 +1026,7 @@ local function QueueItems()
   if FrugalScan_ForceTargetItemIds == true then
     FrugalScan_ForceTargetItemIds = nil
     state.mergeWithLast = true
-    local targets = _G.FrugalScan_TargetItemIds or _G.ProfessionLevelerScan_TargetItemIds or {}
+    local targets = _G.FrugalScan_TargetItemIds or {}
     if type(targets) ~= "table" then targets = {} end
     for _, itemId in ipairs(targets) do
       TryQueue(itemId)
@@ -990,6 +1035,7 @@ local function QueueItems()
       Print("Queued 0 items. Missing-price list was empty.")
     else
       table.sort(state.queue, function(a, b) return a < b end)
+      FilterQueue()
       Print("Queued " .. tostring(#state.queue) .. " missing-price items.")
     end
     state.total = #state.queue
@@ -1059,7 +1105,7 @@ local function QueueItems()
           local reagents = r.reagents
           if type(reagents) == "table" then
             for _, itemId in ipairs(reagents) do
-              if type(itemId) == "number" and itemId > 0 and IsScanQualityAllowed(itemId) then
+              if type(itemId) == "number" and itemId > 0 and IsScanQualityAllowed(itemId) and not IsVendorItem(itemId) then
                 itemSet[itemId] = true
               end
             end
@@ -1072,6 +1118,7 @@ local function QueueItems()
       end
 
       table.sort(state.queue, function(a, b) return a < b end)
+      FilterQueue()
       if #state.queue > 0 then
         Print("Queued " .. tostring(#state.queue) .. " items from full target list.")
         state.total = #state.queue
@@ -1084,7 +1131,15 @@ local function QueueItems()
       local cap = tonumber(GetSetting("expansionCapSkill", 350)) or 350
       if cap < skillLevel then cap = skillLevel end
 
-      local upper = skillLevel + maxSkillDelta
+      local targetSkill = nil
+      if FrugalForgeDB and FrugalForgeDB.settings and tonumber(FrugalForgeDB.settings.targetSkill) then
+        targetSkill = tonumber(FrugalForgeDB.settings.targetSkill)
+      elseif FrugalScanDB and FrugalScanDB.settings and tonumber(FrugalScanDB.settings.targetSkill) then
+        targetSkill = tonumber(FrugalScanDB.settings.targetSkill)
+      end
+
+      local upper = targetSkill or (skillLevel + maxSkillDelta)
+      if upper < skillLevel then upper = skillLevel end
       if upper > cap then upper = cap end
 
       local itemSet = {}
@@ -1098,7 +1153,7 @@ local function QueueItems()
             local reagents = r.reagents
             if type(reagents) == "table" then
               for _, itemId in ipairs(reagents) do
-                if type(itemId) == "number" and itemId > 0 and IsScanQualityAllowed(itemId) then
+                if type(itemId) == "number" and itemId > 0 and IsScanQualityAllowed(itemId) and not IsVendorItem(itemId) then
                   itemSet[itemId] = true
                 end
               end
@@ -1112,8 +1167,9 @@ local function QueueItems()
       end
 
       table.sort(state.queue, function(a, b) return a < b end)
+      FilterQueue()
       if #state.queue > 0 then
-        Print("Queued " .. tostring(#state.queue) .. " items for skill " .. tostring(skillLevel) .. " -> " .. tostring(upper) .. " (delta=" .. tostring(maxSkillDelta) .. ", cap=" .. tostring(cap) .. ").")
+        Print("Queued " .. tostring(#state.queue) .. " items for skill " .. tostring(skillLevel) .. " -> " .. tostring(upper) .. " (target=" .. tostring(targetSkill or "delta " .. tostring(maxSkillDelta)) .. ", cap=" .. tostring(cap) .. ").")
         state.total = #state.queue
         UpdateStatus()
         return
@@ -1123,13 +1179,14 @@ local function QueueItems()
     end
   end
 
-  local targets = _G.FrugalScan_TargetItemIds or _G.ProfessionLevelerScan_TargetItemIds or {}
+  local targets = _G.FrugalScan_TargetItemIds or {}
   if type(targets) ~= "table" then targets = {} end
 
   for _, itemId in ipairs(targets) do
     TryQueue(itemId)
   end
 
+  FilterQueue()
   state.total = #state.queue
   UpdateStatus()
 
@@ -1290,8 +1347,7 @@ local function ProcessCurrentPage()
   local idMatches = 0
   local nameMatches = 0
   local buyoutMissing = 0
-  local rank = tonumber(GetSetting("priceRank", 3)) or 3
-  if rank < 1 then rank = 1 end
+  local rank = 3
 
   for i = 1, shown do
     local auctionName, count, minBid, buyoutPrice, _ = ExtractAuctionRow("list", i)

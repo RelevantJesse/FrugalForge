@@ -1,10 +1,12 @@
 ﻿## Interface: 20501
 ## Title: FrugalForge
 ## Notes: In-game profession planner that reads AH scans and owned mats.
-## Author: ProfessionLeveler
-## Version: 1.0.1
-## SavedVariables: FrugalForgeDB, FrugalScanDB, ProfessionLevelerScanDB, FrugalScan_TargetItemIds, ProfessionLevelerScan_TargetItemIds
+## Author: FrugalForge
+## Version: 1.1.0
+## SavedVariables: FrugalForgeDB, FrugalScanDB, FrugalScan_TargetItemIds
 
+FrugalForge_Data_VendorPrices.lua
+FrugalForge_Data_Producers.lua
 FrugalForge_Data_Anniversary.lua
 FrugalForgeScan.lua
 FrugalForge.lua

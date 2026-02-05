@@ -25,6 +25,56 @@ If Debug builds fail due to locked DLLs, stop the running web process or build w
 - Keep boundaries strict: Core must not reference UI/Infrastructure. Add dependencies via ports in `WowAhPlanner.Core.Ports` and implement them in Infrastructure. UIs (WinForms/Web) reference Core + Infrastructure.
 - JSON data packs: keep small and version-scoped; prefer stable identifiers (`recipeId`, `producerId`, `itemId`) and consistent casing.
 
+## Planner Object Model & Cost Semantics (Do Not Guess)
+
+Define these terms explicitly in code and tests; do not rely on implied meanings.
+
+- Item: uniquely identified by `itemId` (stable across data packs); may have zero or more recipes that produce it.
+- Base mat: an item that is not craftable in-plan (no recipe available, or crafting disabled by user/settings).
+- Intermediate: an item that is craftable and appears as an input (reagent) to at least one recipe in the plan graph.
+- Recipe: produces an output `itemId` with an `outputCount` per craft; has reagents (`itemId`, `quantityPerCraft`) and optional skill range metadata.
+- Recipe graph: directed edges `outputItemId -> reagentItemId` (with quantities + optional skill range).
+- Market price: per-unit buy price; `null`/missing means "unknown price" (not zero).
+- Craft cost: cost to obtain 1 unit of an item via a chosen recipe. Compute per craft, then divide by `outputCount`.
+
+Hard rule: selection-time cost vs shopping-list accounting are separate concerns.
+
+- Selection-time effective cost: marginal cost used only to choose buy vs craft for each needed item/quantity (and which recipe to use if multiple). This may optionally apply an "owned discount" depending on settings.
+- Shopping list accounting: always reflects real quantities (`needed`, `owned`, `toCraft`, `toBuy`). Owned quantities must remain truthful even if selection treated owned as a discount.
+
+UI checkbox semantics (orthogonal and deterministic):
+
+- Ignore owned mats for selection:
+  - Only affects selection-time effective cost calculations (treat owned as 0 for decision-making).
+  - Must not change owned quantities in the shopping list; list still shows owned.
+- Use current character only:
+  - Only affects which owned counts are available (aggregation scope).
+  - Must not change market prices or craft-cost computations.
+- If both are enabled: selection ignores owned; shopping list uses owned from current character only.
+
+Missing price behavior (must be visible; never silently treated as 0):
+
+- For selection: treat missing buy price as invalid/Infinity.
+- If an item has missing buy price but the required quantity can be fully satisfied by owned (under the current owned-scope setting), selection may allow that requirement to be satisfied via owned; outputs must still flag the item as "missing price".
+- If "Ignore owned mats for selection" is enabled, owned must not be used to bypass missing-price invalidation during selection.
+
+Recursion/cycles:
+
+- Intermediates may be recursive. Detect cycles in the recipe graph.
+- If a cycle is detected for an item, treat that item as non-craftable for planning (fallback to buy if priced; otherwise mark as unknown/unplannable).
+- Include a max recursion depth / expansion safeguard to avoid pathological graphs.
+
+Quantities and rounding:
+
+- Crafts occur in whole numbers. `craftCount = ceil(neededUnits / outputCount)`.
+- Reagent requirements expand from `craftCount * quantityPerCraft`.
+- Ensure rounding is applied before expanding reagents so shopping lists and costs match.
+
+Price snapshots / scanning "includes intermediates":
+
+- Price snapshots should track items that are intermediates even if not directly in the final reagent list.
+- Planner must request prices for intermediates encountered during recursive expansion (and their reagents), and surface missing prices clearly.
+
 ## Testing Guidelines
 
 - Framework: xUnit (`[Fact]`).

@@ -1,4 +1,14 @@
-## 1.0.0 - 2026-02-04
+## 1.1.0 - 2026-02-04
+
+- Fix intermediate handling so owned base mats satisfy intermediate crafts (e.g., owned Runecloth now correctly reduces Bolt of Runecloth purchases by preferring craft when fully satisfiable from owned).
+- Fix Build Targets crash caused by `buildRecipeByOutput` being nil (Lua forward-declare scoping issue).
+- Shopping list now accounts for owned quantities when an item appears both as a purchased mat and as an intermediate to craft (owned reduces crafts after covering buy-needed; "need" reflects total buy+craft demand).
+- Scanner cleanup: remove legacy `ProfessionLevelerScan*` bridge globals, clamp scan delay (faster by default), filter vendor/quality-disallowed items, and de-dupe/sanitize scan target IDs.
+- Data pack tweaks: correct vendor prices for Coarse/Fine Thread and ensure common ore/bar item IDs are present in the Anniversary item list.
+- Docs: clarify planner object model + selection-vs-shopping semantics (`AGENTS.md`) and note that FrugalScan is the single source of truth (`docs/addon-planning.md`).
+- Bump addon version to 1.1.0.
+
+## 1.0.1 - 2026-02-04
 
 - Non-trainer recipes are de-prioritized and called out as recipe-required in the plan/shopping list.
 - Plan generation now blocks when any required price is missing, with a prompt to scan first.

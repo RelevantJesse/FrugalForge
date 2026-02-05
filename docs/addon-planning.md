@@ -48,7 +48,7 @@
     - `plan`: last generated plan (steps, shopping list, totals, metadata).
     - `settings`: user options (price rank, skill window, intermediates, showPanelOnAuctionHouse, verboseDebug).
     - `debugLog`: existing log buffer (retain).
-  - Maintain bridge fields to legacy `ProfessionLevelerScan*` names for compatibility.
+  - No legacy bridge fields; FrugalScan is the single source.
 - **Data inputs**
   - Targets are built in-game (no external targets file).
   - Recipe data: embed a trimmed table for the current game version; keep IDs stable and small to reduce memory.
