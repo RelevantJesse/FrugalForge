@@ -15,7 +15,7 @@ So the addon uses the legacy browse query API (`QueryAuctionItems`) and/or the b
 
 ## Build scan targets (in-game)
 
-FrugalForge builds the recipe target list in-game. Pick your profession, choose **Skill +**, then click **Build Targets**. The scan will automatically limit to your current skill up to `maxSkillDelta` higher (default 100), clamped to **Expansion cap skill** (default 350).
+FrugalForge builds the recipe target list in-game. Pick your profession, choose **Skill +**, then click **Build Targets**. The scan will automatically limit to your current skill up to `maxSkillDelta` higher (default 100), clamped to **Expansion cap skill** (default 375).
 
 Targets are stored as:
 - `FrugalScan_TargetProfessionId`
@@ -32,7 +32,7 @@ In-game:
 Options include:
 - Show scan panel when Auction House opens
 - Max skill delta (default 100)
-- Expansion cap skill (default 350)
+- Expansion cap skill (default 375)
 - Max pages per item
 - Min query interval (seconds)
 - Query timeout (seconds)

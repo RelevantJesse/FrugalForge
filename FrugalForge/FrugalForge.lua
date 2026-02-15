@@ -135,6 +135,7 @@ local function ensureDb()
     ignoreOwnedSelection = false,
     currentCharOnlySelection = false,
     ownedValueFactor = 0.9,
+    fontSize = 12,
     devMode = false,
     minimapAngle = 45,
     minimapHidden = false,
@@ -267,6 +268,8 @@ local getProfessionByName
 local applyTargetsSafe
 local debugLog
 local showTextFrame
+local applyFontSize
+local optionsPanel = nil
 
 local function updateScanStatus()
   if not ui.scanValue then return end
@@ -830,8 +833,59 @@ local function updateUi()
   local plan = FrugalForgeDB.lastPlan
   if plan and plan.generatedAt then
     ui.planValue:SetText(string.format("Plan: %s (%s)", plan.generatedAt, fmtAge(plan.generatedAtEpochUtc or time())))
-    ui.stepsBox:SetText(plan.stepsText or "")
-    ui.shoppingBox:SetText(plan.shoppingText or "")
+    if ui.stepsContent then
+      local function renderStepList()
+        local steps = plan.steps or {}
+        ui.stepRows = ui.stepRows or {}
+        ui.stepExpanded = ui.stepExpanded or {}
+        local y = -4
+        for i, step in ipairs(steps) do
+          local row = ui.stepRows[i]
+          if not row then
+            row = CreateFrame("Button", nil, ui.stepsContent)
+            row.text = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+            row.text:SetPoint("TOPLEFT", 0, 0)
+            row.text:SetPoint("TOPRIGHT", 0, 0)
+            row.text:SetJustifyH("LEFT")
+            row.text:SetJustifyV("TOP")
+            ui.stepRows[i] = row
+          end
+          row:ClearAllPoints()
+          row:SetPoint("TOPLEFT", 4, y)
+          row:SetPoint("TOPRIGHT", -4, y)
+          row:SetScript("OnClick", function()
+            if step.breakdown and #step.breakdown > 0 then
+              ui.stepExpanded[i] = not ui.stepExpanded[i]
+              renderStepList()
+            end
+          end)
+          local expanded = ui.stepExpanded[i]
+          local prefix = ""
+          if step.breakdown and #step.breakdown > 0 then
+            prefix = expanded and "[-] " or "[+] "
+          end
+          local text = prefix .. step.text
+          if expanded and step.breakdown and #step.breakdown > 0 then
+            text = text .. "\n" .. table.concat(step.breakdown, "\n")
+          end
+          row.text:SetText(text)
+          row:SetHeight(row.text:GetStringHeight() + 4)
+          row:Show()
+          y = y - row:GetHeight()
+        end
+        for i = #steps + 1, #ui.stepRows do
+          ui.stepRows[i]:Hide()
+        end
+        ui.stepsContent:SetHeight(-y + 8)
+      end
+      renderStepList()
+    end
+    if ui.shoppingBox and ui.shoppingBox.AddMessage then
+      ui.shoppingBox:Clear()
+      for line in string.gmatch(plan.shoppingText or "", "[^\r\n]+") do
+        ui.shoppingBox:AddMessage(line)
+      end
+    end
     if plan.summaryText then
       local lines = {}
       for line in string.gmatch(plan.summaryText, "[^\r\n]+") do
@@ -855,8 +909,14 @@ local function updateUi()
     end
   else
     ui.planValue:SetText("Plan: not generated yet")
-    ui.stepsBox:SetText("")
-    ui.shoppingBox:SetText("")
+    if ui.stepsContent then
+      ui.stepRows = ui.stepRows or {}
+      for _, row in ipairs(ui.stepRows) do row:Hide() end
+      ui.stepsContent:SetHeight(0)
+    end
+    if ui.shoppingBox and ui.shoppingBox.Clear then
+      ui.shoppingBox:Clear()
+    end
     if FrugalForgeDB.settings.debug == true then
       ui.summaryBox:SetText("Debug enabled. Click Generate Plan to populate debug output.")
     else
@@ -1092,6 +1152,8 @@ local function generatePlan()
   local vendorRecipeOverrides = {
     [11225] = false,
     [16217] = true,
+    [21892] = true,
+    [21896] = true,
   }
   local professionData = targetProfessionName and getProfessionByName(targetProfessionName) or nil
   local recipeByOutput = buildRecipeByOutput(professionData)
@@ -1154,8 +1216,32 @@ local function generatePlan()
     return {}
   end
 
+  local function isRecipeKnown(info)
+    local recipe = info and info.recipe
+    local name = (recipe and recipe.name) or (info and info.name)
+    if not name then return false end
+    if type(GetSpellInfo) == "function" then
+      local _, _, _, _, _, _, spellId = GetSpellInfo(name)
+      if spellId and type(IsSpellKnown) == "function" and IsSpellKnown(spellId) then
+        return true
+      end
+      if spellId and type(IsPlayerSpell) == "function" and IsPlayerSpell(spellId) then
+        return true
+      end
+    end
+    return false
+  end
+
   local function formatQty(q)
     return string.format("%.1f", q)
+  end
+
+  local function itemLinkOrName(itemId)
+    if type(GetItemInfo) == "function" then
+      local link = select(2, GetItemInfo(itemId))
+      if link then return link end
+    end
+    return getItemName(itemId)
   end
 
   local function resolveRecipeVendorPrice(recipeItemId, explicitPrice)
@@ -1568,7 +1654,9 @@ local function generatePlan()
       if price then
         cost = cost + (price * buy) + (price * useOwned * ownedValueFactor)
       else
-        missing = missing + 1
+        if buy > 0 then
+          missing = missing + 1
+        end
       end
     end
     cost = cost * recipePenaltyFactor(info)
@@ -1613,6 +1701,23 @@ local function generatePlan()
   end
 
   local recipeInfos = {}
+  local trackedRecipeIds = {
+    ["bolt-of-netherweave"] = true,
+    ["bolt-of-imbued-netherweave"] = true,
+  }
+  local trackedRecipeOrder = {
+    "bolt-of-netherweave",
+    "bolt-of-imbued-netherweave",
+  }
+  local trackedRecipeInfoById = {}
+  local trackedDebugLines = nil
+  if FrugalForgeDB.settings and FrugalForgeDB.settings.debug then
+    trackedDebugLines = {}
+  end
+
+  local function isTrackedRecipeId(recipeId)
+    return recipeId and trackedRecipeIds[recipeId] == true
+  end
 
   local function logTopCandidates(skill)
     if not (FrugalForgeDB.settings and FrugalForgeDB.settings.debug) then return end
@@ -1724,8 +1829,9 @@ local function generatePlan()
         missing = missing + 1
       end
 
-      table.insert(recipeInfos, {
+      local infoEntry = {
         recipe = r,
+        recipeId = r.recipeId,
         minSkill = r.minSkill or 0,
         grayAt = r.grayAt or (r.greenUntil or r.yellowUntil or r.minSkill or 0),
         name = r.name or r.recipeId or "recipe",
@@ -1738,7 +1844,11 @@ local function generatePlan()
         requiresRecipe = r.requiresRecipe == true,
         recipeItemId = recipeItemId,
         recipeVendorPrice = recipeVendorPrice,
-      })
+      }
+      table.insert(recipeInfos, infoEntry)
+      if isTrackedRecipeId(r.recipeId) then
+        trackedRecipeInfoById[r.recipeId] = infoEntry
+      end
       end
     end
     end
@@ -1789,16 +1899,87 @@ local function generatePlan()
     if type(FrugalForgeDB.lastCandidateDebugLines) ~= "table" then
       FrugalForgeDB.lastCandidateDebugLines = { "Top candidates unavailable (no data)" }
     end
+    if trackedDebugLines then
+      table.insert(trackedDebugLines, "Tracked recipe diagnostics:")
+      for _, trackedId in ipairs(trackedRecipeOrder) do
+        local info = trackedRecipeInfoById[trackedId]
+        if not info then
+          table.insert(trackedDebugLines, string.format("  - %s: not present in active recipe targets", trackedId))
+        else
+          table.insert(trackedDebugLines, string.format(
+            "  - %s: min=%d grayAt=%d missingPriceCount=%d requiresRecipe=%s recipeVendor=%s known=%s",
+            trackedId,
+            info.minSkill or 0,
+            info.grayAt or 0,
+            info.missingPriceCount or 0,
+            tostring(info.requiresRecipe == true),
+            info.recipeVendorPrice and copperToText(info.recipeVendorPrice) or "n/a",
+            tostring(isRecipeKnown(info))
+          ))
+          local leafIds = {}
+          for itemId in pairs(info.leaf or {}) do
+            table.insert(leafIds, itemId)
+          end
+          table.sort(leafIds)
+          for _, itemId in ipairs(leafIds) do
+            local qty = info.leaf[itemId] or 0
+            local price = prices[itemId]
+            if not price then
+              price = getVendorPrice(itemId)
+            end
+            local ownedQty = getOwnedCount(itemId, "selection")
+            local blocks = (not price) and (ownedQty < qty)
+            table.insert(trackedDebugLines, string.format(
+              "      * %s (%d): qty=%s owned(selection)=%s price=%s blocks=%s",
+              getItemName(itemId), itemId, tostring(qty), tostring(ownedQty),
+              price and copperToText(price) or "missing",
+              tostring(blocks == true)
+            ))
+          end
+        end
+      end
+    end
   end
 
   local ownedRemainingSelection = {}
   local ownedRecipes = {}
+  local function recipePriorityFactor(info)
+    local recipeId = info and info.recipe and info.recipe.recipeId
+    if recipeId == "bolt-of-netherweave" then
+      return 0.75
+    end
+    if recipeId == "bolt-of-imbued-netherweave" then
+      return 0.70
+    end
+    if info and info.requiresRecipe and info.recipeVendorPrice then
+      return 0.90
+    end
+    return 1
+  end
+
+  local function amortizedRecipeScoreCost(skill, info, recipeCost)
+    if not recipeCost or recipeCost <= 0 then return 0 end
+    local startSkill = math.max(skill, info.minSkill or skill)
+    local endSkill = math.min(targetSkill - 1, (info.grayAt or (startSkill + 1)) - 1)
+    local remainingSkills = endSkill - startSkill + 1
+    if remainingSkills < 1 then remainingSkills = 1 end
+    return recipeCost / remainingSkills
+  end
+
   local chosenBySkill = {}
   for skill = currentSkill, targetSkill - 1 do
     local best = nil
+    local trackedSkillState = nil
+    if trackedDebugLines and skill >= 295 and skill <= 360 then
+      trackedSkillState = {}
+    end
     for _, info in ipairs(recipeInfos) do
+      local recipeId = info.recipeId or (info.recipe and info.recipe.recipeId)
       if skill >= info.minSkill and skill < info.grayAt then
         if info.missingPriceCount and info.missingPriceCount > 0 then
+          if trackedSkillState and isTrackedRecipeId(recipeId) then
+            trackedSkillState[recipeId] = string.format("blocked: missingPriceCount=%d", info.missingPriceCount or 0)
+          end
           -- skip recipes with missing price data
         else
           local p = chanceForSkill(skill, info.recipe)
@@ -1808,18 +1989,37 @@ local function generatePlan()
             local rawCost, rawMissing = estimateCostForCraftsNoOwned(info, crafts)
             local recipeKey = info.recipeItemId or (info.recipe and info.recipe.recipeId) or info.recipeId or info.name
             local recipeCost = 0
-            if info.requiresRecipe and info.recipeVendorPrice and recipeKey and not ownedRecipes[recipeKey] then
+            if info.requiresRecipe and info.recipeVendorPrice and recipeKey and not ownedRecipes[recipeKey] and not isRecipeKnown(info) then
               recipeCost = info.recipeVendorPrice
             end
             if recipeCost > 0 then
               cost = cost + recipeCost
               rawCost = rawCost + recipeCost
             end
+            local scoreCost = cost
+            local scoreRawCost = rawCost
+            if recipeCost > 0 then
+              local amortizedCost = amortizedRecipeScoreCost(skill, info, recipeCost)
+              scoreCost = scoreCost - recipeCost + amortizedCost
+              scoreRawCost = scoreRawCost - recipeCost + amortizedCost
+            end
+            local priorityFactor = recipePriorityFactor(info)
+            scoreCost = scoreCost * priorityFactor
+            scoreRawCost = scoreRawCost * priorityFactor
+            if trackedSkillState and isTrackedRecipeId(recipeId) then
+              trackedSkillState[recipeId] = string.format(
+                "candidate: p=%.2f score=%s expected=%s missing=%d",
+                p,
+                copperToText(math.floor(scoreCost + 0.5)),
+                copperToText(math.floor(cost + 0.5)),
+                missing
+              )
+            end
             if not best
               or missing < best.missing
-              or (missing == best.missing and cost < best.expectedCost)
-              or (missing == best.missing and cost == best.expectedCost and rawMissing < best.rawMissing)
-              or (missing == best.missing and cost == best.expectedCost and rawMissing == best.rawMissing and rawCost < best.rawCost) then
+              or (missing == best.missing and scoreCost < best.scoreCost)
+              or (missing == best.missing and scoreCost == best.scoreCost and rawMissing < best.rawMissing)
+              or (missing == best.missing and scoreCost == best.scoreCost and rawMissing == best.rawMissing and scoreRawCost < best.scoreRawCost) then
               best = {
                 info = info,
                 p = p,
@@ -1827,12 +2027,35 @@ local function generatePlan()
                 expectedCost = cost,
                 missing = missing,
                 rawCost = rawCost,
-                rawMissing = rawMissing
+                rawMissing = rawMissing,
+                scoreCost = scoreCost,
+                scoreRawCost = scoreRawCost
               }
             end
+          elseif trackedSkillState and isTrackedRecipeId(recipeId) then
+            trackedSkillState[recipeId] = "blocked: skill-up chance is 0"
           end
         end
       end
+    end
+    if trackedSkillState then
+      local winnerName = best and (best.info.name or best.info.recipeId or "none") or "none"
+      local states = {}
+      for _, trackedId in ipairs(trackedRecipeOrder) do
+        local state = trackedSkillState[trackedId]
+        if not state then
+          local trackedInfo = trackedRecipeInfoById[trackedId]
+          if not trackedInfo then
+            state = "not in active targets"
+          elseif skill < (trackedInfo.minSkill or 0) or skill >= (trackedInfo.grayAt or 0) then
+            state = "out-of-window"
+          else
+            state = "not evaluated"
+          end
+        end
+        table.insert(states, trackedId .. "=" .. state)
+      end
+      table.insert(trackedDebugLines, string.format("  skill %d winner=%s | %s", skill, winnerName, table.concat(states, " | ")))
     end
     if not best then break end
     chosenBySkill[skill] = best
@@ -1843,6 +2066,13 @@ local function generatePlan()
       end
     end
     consumeOwnedForCrafts(best.info, best.crafts, ownedRemainingSelection)
+  end
+  if trackedDebugLines and #trackedDebugLines > 0 then
+    FrugalForgeDB.lastCandidateDebugLines = FrugalForgeDB.lastCandidateDebugLines or {}
+    table.insert(FrugalForgeDB.lastCandidateDebugLines, "")
+    for _, line in ipairs(trackedDebugLines) do
+      table.insert(FrugalForgeDB.lastCandidateDebugLines, line)
+    end
   end
 
   local ranges = {}
@@ -1912,10 +2142,14 @@ local function generatePlan()
   end
   local stepEntries = {}
   local ownedForSteps = {}
-  for itemId, qty in pairs(ownedMap) do ownedForSteps[itemId] = qty end
+  local essenceByItem = {}
+  for _, pair in ipairs(ESSENCE_PAIRS) do
+    essenceByItem[pair.lesser] = { other = pair.greater, unit = "lesser" }
+    essenceByItem[pair.greater] = { other = pair.lesser, unit = "greater" }
+  end
   table.sort(rodSteps, function(a, b) return a.sortKey < b.sortKey end)
   for _, entry in ipairs(rodSteps) do
-    table.insert(stepEntries, { startSkill = entry.sortKey, endSkill = entry.sortKey, text = entry.text })
+    table.insert(stepEntries, { startSkill = entry.sortKey, endSkill = entry.sortKey, text = entry.text, breakdown = nil })
   end
   for _, r in ipairs(ranges) do
     local displayStart = r.startSkill
@@ -1924,21 +2158,74 @@ local function generatePlan()
     local craftCount = r.craftCount or math.ceil(r.crafts or 0)
     local rangeCost = 0
     local rangeMissing = 0
-    if r.info.requiresRecipe then
+    local breakdownLines = {}
+    if r.info.requiresRecipe and not isRecipeKnown(r.info) then
       recipeNeeds[r.info.recipe.recipeId or r.info.name or "recipe"] = r.info
     end
-    for itemId, qty in pairs(r.info.leaf) do
-      local need = qty * craftCount
-      local ownedQty = ownedForSteps[itemId] or 0
-      local useOwned = math.min(need, ownedQty)
-      if useOwned > 0 then
-        ownedForSteps[itemId] = ownedQty - useOwned
+    local orangeUntil = (r.info.recipe and (r.info.recipe.orangeUntil or r.info.recipe.minSkill)) or r.info.minSkill or 0
+    local isOrangeRange = (displayEnd - 1) <= orangeUntil
+    local craftPrefix = isOrangeRange and "" or "~"
+    local function getOwnedForSteps(itemId)
+      if ownedForSteps[itemId] == nil then
+        ownedForSteps[itemId] = getOwnedCount(itemId, "shopping")
       end
+      return ownedForSteps[itemId] or 0
+    end
+    local function consumeOwnedForSteps(itemId, need)
+      local info = essenceByItem[itemId]
+      if not info then
+        local ownedQty = getOwnedForSteps(itemId)
+        local useOwned = math.min(need, ownedQty)
+        if useOwned > 0 then
+          ownedForSteps[itemId] = ownedQty - useOwned
+        end
+        return useOwned, ownedQty
+      end
+
+      local otherId = info.other
+      local ownedSelf = getOwnedForSteps(itemId)
+      local ownedOther = getOwnedForSteps(otherId)
+      local effectiveOwned = 0
+      if info.unit == "lesser" then
+        effectiveOwned = ownedSelf + (ownedOther * 3)
+      else
+        effectiveOwned = ownedSelf + (ownedOther / 3)
+      end
+      local useOwned = math.min(need, effectiveOwned)
+      if useOwned <= 0 then
+        return 0, effectiveOwned
+      end
+      local remaining = useOwned
+      -- consume same unit first
+      local takeSelf = math.min(ownedSelf, remaining)
+      if takeSelf > 0 then
+        ownedSelf = ownedSelf - takeSelf
+        remaining = remaining - takeSelf
+      end
+      if remaining > 0 then
+        if info.unit == "lesser" then
+          local takeOther = math.min(ownedOther, math.ceil(remaining / 3))
+          ownedOther = ownedOther - takeOther
+          remaining = 0
+        else
+          local takeOther = math.min(ownedOther, remaining * 3)
+          ownedOther = ownedOther - takeOther
+          remaining = 0
+        end
+      end
+      ownedForSteps[itemId] = ownedSelf
+      ownedForSteps[otherId] = ownedOther
+      return useOwned, effectiveOwned
+    end
+    for itemId, qty in pairs(r.info.leaf) do
+      local itemKey = tonumber(itemId) or itemId
+      local need = qty * craftCount
+      local useOwned, ownedQty = consumeOwnedForSteps(itemKey, need)
       local buy = need - useOwned
       if buy > 0 then
-        local price = prices[itemId]
+        local price = prices[itemKey]
         if not price then
-          price = getVendorPrice(itemId)
+          price = getVendorPrice(itemKey)
         end
         if price then
           rangeCost = rangeCost + (price * buy)
@@ -1946,18 +2233,32 @@ local function generatePlan()
           rangeMissing = rangeMissing + 1
         end
       end
+      local price = prices[itemKey]
+      if not price then
+        price = getVendorPrice(itemKey)
+      end
+      local priceText = price and copperToText(price) or "missing price"
+      local totalText = price and copperToText(price * buy) or "?"
+      table.insert(breakdownLines, string.format("  -- ~%d %s (owned %d): Buy %d @ %s = %s",
+        need,
+        getItemName(itemKey),
+        ownedQty,
+        buy,
+        priceText,
+        totalText))
     end
     local costText = copperToText(math.floor(rangeCost + 0.5))
     if rangeMissing > 0 then
       costText = costText .. " (missing prices)"
     end
     local recipeTag = r.info.requiresRecipe and " (recipe required)" or ""
-    table.insert(stepEntries, { startSkill = displayStart, endSkill = displayEnd, text = string.format("- %s%s%s: cost %s (craft ~%d)",
+    table.insert(stepEntries, { startSkill = displayStart, endSkill = displayEnd, text = string.format("(%s%d) %s%s%s: cost %s",
+      craftPrefix,
+      craftCount,
       r.info.name,
       skillText,
       recipeTag,
-      costText,
-      craftCount) })
+      costText), breakdown = breakdownLines })
   end
 
   local ownedRemaining = {}
@@ -2040,16 +2341,20 @@ local function generatePlan()
   local iExtra = 1
   for _, step in ipairs(stepEntries) do
     while iExtra <= #extraLines and extraLines[iExtra].sortKey <= step.endSkill do
-      table.insert(mergedSteps, extraLines[iExtra].text)
+      table.insert(mergedSteps, { text = extraLines[iExtra].text, breakdown = nil, startSkill = extraLines[iExtra].sortKey, endSkill = extraLines[iExtra].sortKey })
       iExtra = iExtra + 1
     end
-    table.insert(mergedSteps, step.text)
+    table.insert(mergedSteps, step)
   end
   while iExtra <= #extraLines do
-    table.insert(mergedSteps, extraLines[iExtra].text)
+    table.insert(mergedSteps, { text = extraLines[iExtra].text, breakdown = nil, startSkill = extraLines[iExtra].sortKey, endSkill = extraLines[iExtra].sortKey })
     iExtra = iExtra + 1
   end
-  stepLines = mergedSteps
+  local stepLinesText = {}
+  for _, step in ipairs(mergedSteps) do
+    table.insert(stepLinesText, step.text)
+  end
+  stepLines = stepLinesText
 
   for itemId, crafts in pairs(intermediatesAll) do
     local recipe = recipeByOutput[itemId]
@@ -2168,26 +2473,37 @@ local function generatePlan()
       local craftLesser = (lesserEntry and (lesserEntry.craft or 0)) or 0
       local totalNeedGreater = needGreater + (needLesser / 3)
       local totalCraftGreater = craftGreater + (craftLesser / 3)
+      local totalNeedLesser = needLesser + (needGreater * 3)
+      local totalCraftLesser = craftLesser + (craftGreater * 3)
       local priceGreater = (greaterEntry and greaterEntry.price) or prices[pair.greater] or getVendorPrice(pair.greater)
       local priceLesser = (lesserEntry and lesserEntry.price) or prices[pair.lesser] or getVendorPrice(pair.lesser)
-      local effectivePrice = nil
+      local showUnit = "greater"
       if priceGreater and priceLesser then
-        effectivePrice = math.min(priceGreater, priceLesser * 3)
-      elseif priceGreater then
-        effectivePrice = priceGreater
-      elseif priceLesser then
-        effectivePrice = priceLesser * 3
+        showUnit = (priceLesser * 3 < priceGreater) and "lesser" or "greater"
+      elseif priceLesser and not priceGreater then
+        showUnit = "lesser"
+      end
+      local effectivePrice = nil
+      if showUnit == "greater" then
+        if priceGreater and priceLesser then
+          effectivePrice = math.min(priceGreater, priceLesser * 3)
+        else
+          effectivePrice = priceGreater or (priceLesser and priceLesser * 3) or nil
+        end
+      else
+        effectivePrice = priceLesser
       end
       table.insert(shoppingList, {
-        itemId = pair.greater,
+        itemId = (showUnit == "greater") and pair.greater or pair.lesser,
         entry = {
-          need = totalNeedGreater,
-          craft = totalCraftGreater,
+          need = (showUnit == "greater") and totalNeedGreater or totalNeedLesser,
+          craft = (showUnit == "greater") and totalCraftGreater or totalCraftLesser,
           price = effectivePrice,
           isVendor = false,
           isEssenceCombined = true,
           lesserId = pair.lesser,
           greaterId = pair.greater,
+          showUnit = showUnit,
         }
       })
     end
@@ -2214,7 +2530,11 @@ local function generatePlan()
       local lesserId = entry.lesserId
       local ownedGreater = getOwnedCount(greaterId, "shopping")
       local ownedLesser = getOwnedCount(lesserId, "shopping")
-      ownedLive = ownedGreater + (ownedLesser / 3)
+      if entry.showUnit == "lesser" then
+        ownedLive = ownedLesser + (ownedGreater * 3)
+      else
+        ownedLive = ownedGreater + (ownedLesser / 3)
+      end
       netCraft = needCraft
     else
       if ownedLive == nil then
@@ -2256,12 +2576,24 @@ local function generatePlan()
       craftText = entry.isEssenceCombined and string.format(", craft %s", formatQty(craft)) or string.format(", craft %d", craft)
     end
     if entry.isEssenceCombined then
-      local line = string.format("  - %s (%d): need %s (owned %s%s)%s, buy %s @ %s = %s%s",
-        getItemName(itemId), itemId, formatQty(totalNeed), formatQty(ownedLive), ownedBreakdown, craftText, formatQty(buy), priceText, totalText, missingTag)
+      local otherNote = ""
+      if entry.showUnit == "greater" then
+        local lesserPrice = prices[entry.lesserId] or getVendorPrice(entry.lesserId)
+        if lesserPrice then
+          otherNote = " (lesser*3 = " .. copperToText(lesserPrice * 3) .. ")"
+        end
+      else
+        local greaterPrice = prices[entry.greaterId] or getVendorPrice(entry.greaterId)
+        if greaterPrice then
+          otherNote = " (greater = " .. copperToText(greaterPrice) .. ")"
+        end
+      end
+      local line = string.format("  - %s (%d): need %s (owned %s%s)%s, buy %s @ %s = %s%s%s",
+        itemLinkOrName(itemId), itemId, formatQty(totalNeed), formatQty(ownedLive), ownedBreakdown, craftText, formatQty(buy), priceText, totalText, missingTag, otherNote)
       table.insert(shoppingLines, line)
     else
       local line = string.format("  - %s (%d): need %d (owned %d%s)%s, buy %d @ %s = %s%s%s",
-        getItemName(itemId), itemId, totalNeed, ownedLive, ownedBreakdown, craftText, buy, priceText, totalText, missingTag, vendorTag)
+        itemLinkOrName(itemId), itemId, totalNeed, ownedLive, ownedBreakdown, craftText, buy, priceText, totalText, missingTag, vendorTag)
       table.insert(shoppingLines, line)
     end
 
@@ -2283,7 +2615,16 @@ local function generatePlan()
       if info.recipeVendorPrice then
         recipePriceText = " vendor " .. copperToText(info.recipeVendorPrice)
       end
-      table.insert(shoppingLines, string.format("  - Recipe: %s (not trainer learned;%s)", info.name or info.recipeId or "recipe", recipePriceText ~= "" and recipePriceText or " vendor/AH/quest"))
+      local recipeItemText = info.name or info.recipeId or "recipe"
+      if info.recipeItemId then
+        local linked = itemLinkOrName(info.recipeItemId)
+        if linked == ("item " .. tostring(info.recipeItemId)) then
+          recipeItemText = string.format("Pattern: %s (%d)", info.name or info.recipeId or "recipe", info.recipeItemId)
+        else
+          recipeItemText = linked
+        end
+      end
+      table.insert(shoppingLines, string.format("  - Recipe: %s (not trainer learned;%s)", recipeItemText, recipePriceText ~= "" and recipePriceText or " vendor/AH/quest"))
       if info.recipeVendorPrice then
         recomputedTotalCost = recomputedTotalCost + info.recipeVendorPrice
       elseif info.recipeItemId and shouldTrackMissingPrice(info.recipeItemId) then
@@ -2367,6 +2708,7 @@ local function generatePlan()
     pricedKinds = pricedKindCount,
     staleWarning = staleWarn,
     stepsText = table.concat(stepLines, "\n"),
+    steps = mergedSteps,
     shoppingText = table.concat(shoppingLines, "\n"),
     summaryText = table.concat(summaryLines, "\n"),
     missingPriceItemIds = (function()
@@ -2394,12 +2736,17 @@ local function createUi()
   f:RegisterForDrag("LeftButton")
   f:SetScript("OnDragStart", f.StartMoving)
   f:SetScript("OnDragStop", f.StopMovingOrSizing)
+  local function setKeyboardPropagation(frame, propagate)
+    -- Protected during combat; avoid taint errors.
+    if InCombatLockdown and InCombatLockdown() then return end
+    frame:SetPropagateKeyboardInput(propagate)
+  end
   f:SetScript("OnKeyDown", function(self, key)
     if key == "ESCAPE" then
       self:Hide()
-      self:SetPropagateKeyboardInput(false)
+      setKeyboardPropagation(self, false)
     else
-      self:SetPropagateKeyboardInput(true)
+      setKeyboardPropagation(self, true)
     end
   end)
 
@@ -2463,7 +2810,7 @@ local function createUi()
   ui.deltaBox:SetPoint("TOPLEFT", 375, y - 2)
   ui.deltaBox:SetAutoFocus(false)
   ui.deltaBox:SetNumeric(true)
-  ui.deltaBox:SetText(tostring(FrugalForgeDB.settings.targetSkill or 350))
+  ui.deltaBox:SetText(tostring(FrugalForgeDB.settings.targetSkill or 375))
 
   ui.buildTargetsBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
   ui.buildTargetsBtn:SetSize(120, 22)
@@ -2551,6 +2898,39 @@ local function createUi()
   ui.generateBtn:SetText("Generate Plan")
   ui.generateBtn:SetScript("OnClick", generatePlan)
 
+  ui.copyPlanBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+  ui.copyPlanBtn:SetSize(120, 22)
+  ui.copyPlanBtn:SetPoint("LEFT", ui.generateBtn, "RIGHT", 8, 0)
+  ui.copyPlanBtn:SetText("Export Plan")
+  ui.copyPlanBtn:SetScript("OnClick", function()
+    local plan = FrugalForgeDB.lastPlan
+    if not plan then
+      log("No plan to copy. Generate a plan first.")
+      return
+    end
+    local text = {}
+    table.insert(text, "Plan:")
+    if type(plan.steps) == "table" then
+      for _, step in ipairs(plan.steps) do
+        if step and step.text then
+          table.insert(text, step.text)
+          if step.breakdown then
+            for _, line in ipairs(step.breakdown) do
+              table.insert(text, line)
+            end
+          end
+        end
+      end
+    else
+      table.insert(text, plan.stepsText or "")
+    end
+    table.insert(text, "")
+    table.insert(text, "Shopping List:")
+    table.insert(text, plan.shoppingText or "")
+    local full = table.concat(text, "\n")
+    showTextFrame(full, "Export Plan")
+  end)
+
   ui.ignoreOwnedCheck = CreateFrame("CheckButton", "FrugalForgeIgnoreOwnedCheck", f, "UICheckButtonTemplate")
   ui.ignoreOwnedCheck:ClearAllPoints()
   ui.ignoreOwnedCheck:SetPoint("TOPLEFT", 500, -40)
@@ -2568,26 +2948,6 @@ local function createUi()
   ui.currentCharOnlyCheck:SetChecked(FrugalForgeDB.settings.currentCharOnlySelection == true)
   ui.currentCharOnlyCheck:SetScript("OnClick", function(btn)
     FrugalForgeDB.settings.currentCharOnlySelection = btn:GetChecked() and true or false
-    generatePlan()
-  end)
-
-  ui.ownedFactorLabel = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-  ui.ownedFactorLabel:ClearAllPoints()
-  ui.ownedFactorLabel:SetPoint("TOPLEFT", 450, -150)
-  ui.ownedFactorLabel:SetText("Owned value factor")
-
-  ui.ownedFactorBox = CreateFrame("EditBox", nil, f, "InputBoxTemplate")
-  ui.ownedFactorBox:SetSize(40, 20)
-  ui.ownedFactorBox:SetPoint("LEFT", ui.ownedFactorLabel, "RIGHT", 8, 0)
-  ui.ownedFactorBox:SetAutoFocus(false)
-  ui.ownedFactorBox:SetText(tostring(FrugalForgeDB.settings.ownedValueFactor or 0.9))
-  ui.ownedFactorBox:SetScript("OnEnterPressed", function(box)
-    local v = tonumber(box:GetText())
-    if not v then v = 0.9 end
-    if v < 0 then v = 0 end
-    if v > 1 then v = 1 end
-    FrugalForgeDB.settings.ownedValueFactor = v
-    box:SetText(tostring(v))
     generatePlan()
   end)
 
@@ -2653,14 +3013,11 @@ local function createUi()
   stepsScroll:SetPoint("RIGHT", -36, -8)
   stepsScroll:SetHeight(180)
 
-  local stepsBox = CreateFrame("EditBox", nil, stepsScroll)
-  stepsBox:SetMultiLine(true)
-  stepsBox:SetFontObject(GameFontHighlightSmall)
-  stepsBox:SetWidth(660)
-  stepsBox:SetAutoFocus(false)
-  stepsBox:SetScript("OnEscapePressed", function() stepsBox:ClearFocus() end)
-  stepsScroll:SetScrollChild(stepsBox)
-  ui.stepsBox = stepsBox
+  local stepsContent = CreateFrame("Frame", nil, stepsScroll)
+  stepsContent:SetWidth(660)
+  stepsContent:SetHeight(1)
+  stepsScroll:SetScrollChild(stepsContent)
+  ui.stepsContent = stepsContent
 
   -- Shopping box
   local shopScroll = CreateFrame("ScrollFrame", nil, f, "UIPanelScrollFrameTemplate")
@@ -2668,12 +3025,19 @@ local function createUi()
   shopScroll:SetPoint("RIGHT", -36, -8)
   shopScroll:SetHeight(180)
 
-  local shopBox = CreateFrame("EditBox", nil, shopScroll)
-  shopBox:SetMultiLine(true)
+  local shopBox = CreateFrame("ScrollingMessageFrame", nil, shopScroll)
   shopBox:SetFontObject(GameFontHighlightSmall)
   shopBox:SetWidth(660)
-  shopBox:SetAutoFocus(false)
-  shopBox:SetScript("OnEscapePressed", function() shopBox:ClearFocus() end)
+  shopBox:SetHeight(180)
+  shopBox:SetJustifyH("LEFT")
+  shopBox:SetFading(false)
+  shopBox:SetMaxLines(4000)
+  shopBox:SetHyperlinksEnabled(true)
+  shopBox:SetScript("OnHyperlinkClick", function(_, link, text, button)
+    if SetItemRef then
+      SetItemRef(link, text, button)
+    end
+  end)
   shopScroll:SetScrollChild(shopBox)
   ui.shoppingBox = shopBox
 
@@ -2690,6 +3054,8 @@ local function createUi()
   summaryBox:SetScript("OnEscapePressed", function() summaryBox:ClearFocus() end)
   summaryScroll:SetScrollChild(summaryBox)
   ui.summaryBox = summaryBox
+
+  applyFontSize()
 
   ui.frame = f
 
@@ -2823,6 +3189,99 @@ local function toggleUi()
 end
 
 
+applyFontSize = function()
+  if not ui.frame then return end
+  local fontFile, _, fontFlags = GameFontHighlightSmall:GetFont()
+  local size = tonumber(FrugalForgeDB.settings.fontSize) or 12
+  if size < 8 then size = 8 end
+  if size > 18 then size = 18 end
+
+  if ui.shoppingBox and ui.shoppingBox.SetFont then
+    ui.shoppingBox:SetFont(fontFile, size, fontFlags)
+  end
+  if ui.summaryBox and ui.summaryBox.SetFont then
+    ui.summaryBox:SetFont(fontFile, size, fontFlags)
+  end
+  if ui.stepRows then
+    for _, row in ipairs(ui.stepRows) do
+      if row.text and row.text.SetFont then
+        row.text:SetFont(fontFile, size, fontFlags)
+      end
+    end
+  end
+end
+
+local function createOptionsPanel()
+  if optionsPanel then return end
+  local panel = CreateFrame("Frame")
+  panel.name = "FrugalForge"
+
+  local title = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+  title:SetPoint("TOPLEFT", 16, -16)
+  title:SetText("FrugalForge")
+
+  local ownedLabel = panel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  ownedLabel:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -16)
+  ownedLabel:SetText("Owned value factor")
+
+  local ownedSlider = CreateFrame("Slider", "FrugalForgeOwnedValueSlider", panel, "OptionsSliderTemplate")
+  ownedSlider:SetPoint("TOPLEFT", ownedLabel, "BOTTOMLEFT", 0, -8)
+  ownedSlider:SetMinMaxValues(0, 1)
+  ownedSlider:SetValueStep(0.05)
+  ownedSlider:SetObeyStepOnDrag(true)
+  ownedSlider:SetWidth(200)
+  ownedSlider:SetValue(FrugalForgeDB.settings.ownedValueFactor or 0.9)
+  _G[ownedSlider:GetName() .. "Low"]:SetText("0.0")
+  _G[ownedSlider:GetName() .. "High"]:SetText("1.0")
+  _G[ownedSlider:GetName() .. "Text"]:SetText(string.format("%.2f", ownedSlider:GetValue()))
+  ownedSlider:SetScript("OnValueChanged", function(self, value)
+    FrugalForgeDB.settings.ownedValueFactor = value
+    _G[self:GetName() .. "Text"]:SetText(string.format("%.2f", value))
+    generatePlan()
+  end)
+
+  local fontLabel = panel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  fontLabel:SetPoint("TOPLEFT", ownedSlider, "BOTTOMLEFT", 0, -24)
+  fontLabel:SetText("Font size")
+
+  local fontSlider = CreateFrame("Slider", "FrugalForgeFontSizeSlider", panel, "OptionsSliderTemplate")
+  fontSlider:SetPoint("TOPLEFT", fontLabel, "BOTTOMLEFT", 0, -8)
+  fontSlider:SetMinMaxValues(10, 18)
+  fontSlider:SetValueStep(1)
+  fontSlider:SetObeyStepOnDrag(true)
+  fontSlider:SetWidth(200)
+  fontSlider:SetValue(FrugalForgeDB.settings.fontSize or 12)
+  _G[fontSlider:GetName() .. "Low"]:SetText("10")
+  _G[fontSlider:GetName() .. "High"]:SetText("18")
+  _G[fontSlider:GetName() .. "Text"]:SetText(tostring(fontSlider:GetValue()))
+  fontSlider:SetScript("OnValueChanged", function(self, value)
+    FrugalForgeDB.settings.fontSize = value
+    _G[self:GetName() .. "Text"]:SetText(tostring(value))
+    applyFontSize()
+  end)
+
+  if InterfaceOptions_AddCategory then
+    InterfaceOptions_AddCategory(panel)
+  elseif Settings and Settings.RegisterCanvasLayoutCategory and Settings.RegisterAddOnCategory then
+    local category = Settings.RegisterCanvasLayoutCategory(panel, panel.name)
+    Settings.RegisterAddOnCategory(category)
+    panel._settingsCategory = category
+  end
+  optionsPanel = panel
+end
+
+local function openSettingsPanel()
+  if not optionsPanel then return end
+  if Settings and Settings.OpenToCategory and optionsPanel._settingsCategory then
+    Settings.OpenToCategory(optionsPanel._settingsCategory)
+    return
+  end
+  if InterfaceOptionsFrame_OpenToCategory then
+    InterfaceOptionsFrame_OpenToCategory(optionsPanel)
+    InterfaceOptionsFrame_OpenToCategory(optionsPanel)
+  end
+end
+
 local setMinimapButtonHidden
 local function createMinimapButton()
   if ui.minimapBtn or not Minimap then return end
@@ -2860,6 +3319,7 @@ local function createMinimapButton()
 
   btn:SetScript("OnClick", function(_, button)
     if button == "RightButton" then
+      openSettingsPanel()
       return
     end
     if IsAltKeyDown and IsAltKeyDown() then
@@ -2883,6 +3343,8 @@ local function createMinimapButton()
     GameTooltip:AddLine("FrugalForge", 1, 0.82, 0)
     GameTooltip:AddLine("Left click:", 0.7, 0.7, 0.7, false)
     GameTooltip:AddLine("Open FrugalForge window", 1, 1, 1, false)
+    GameTooltip:AddLine("Right click:", 0.7, 0.7, 0.7, false)
+    GameTooltip:AddLine("Open settings", 1, 1, 1, false)
     GameTooltip:AddLine("Ctrl click:", 0.7, 0.7, 0.7, false)
     GameTooltip:AddLine("Start AH scan for current targets", 1, 1, 1, false)
     GameTooltip:AddLine("Alt click:", 0.7, 0.7, 0.7, false)
@@ -3044,6 +3506,7 @@ eventFrame:RegisterEvent("ADDON_LOADED")
 eventFrame:SetScript("OnEvent", function(_, event, addon)
   if event == "ADDON_LOADED" and addon == ADDON_NAME then
     ensureDb()
+    createOptionsPanel()
     createMinimapButton()
     createUi()
     if FrugalForgeDB.targets then

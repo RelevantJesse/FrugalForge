@@ -15,7 +15,7 @@ local function EnsureDb()
 
   local s = FrugalScanDB.settings
   if type(s.maxSkillDelta) ~= "number" then s.maxSkillDelta = 100 end
-  if type(s.expansionCapSkill) ~= "number" then s.expansionCapSkill = 350 end
+  if type(s.expansionCapSkill) ~= "number" then s.expansionCapSkill = 375 end
   if type(s.maxPagesPerItem) ~= "number" then s.maxPagesPerItem = 10 end
   if type(s.minQueryIntervalSeconds) ~= "number" then s.minQueryIntervalSeconds = 1.5 end
   if s.minQueryIntervalSeconds > 1.5 then s.minQueryIntervalSeconds = 1.5 end
@@ -1141,7 +1141,7 @@ local function QueueItems()
 
       Print("No reagent itemIds found in targets. Falling back to legacy target list if present.")
     else
-      local cap = tonumber(GetSetting("expansionCapSkill", 350)) or 350
+      local cap = tonumber(GetSetting("expansionCapSkill", 375)) or 375
       if cap < skillLevel then cap = skillLevel end
 
       local targetSkill = nil
@@ -1620,7 +1620,7 @@ SlashCmdList["FRUGALSCAN"] = function(msg)
   if cmd == "debug" then
     Print("Target id=" .. tostring(FrugalScan_TargetProfessionId) .. ", name=" .. tostring(FrugalScan_TargetProfessionName))
     Print("Settings: maxSkillDelta=" .. tostring(GetSetting("maxSkillDelta", 100)) ..
-      ", expansionCapSkill=" .. tostring(GetSetting("expansionCapSkill", 350)) ..
+      ", expansionCapSkill=" .. tostring(GetSetting("expansionCapSkill", 375)) ..
       ", maxPagesPerItem=" .. tostring(GetSetting("maxPagesPerItem", 10)) ..
       ", minQueryIntervalSeconds=" .. tostring(GetSetting("minQueryIntervalSeconds", 3)) ..
       ", queryTimeoutSeconds=" .. tostring(GetSetting("queryTimeoutSeconds", 10)) ..
